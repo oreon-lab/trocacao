@@ -15,9 +15,14 @@ Abra http://localhost:5173. O mesmo servidor entrega o jogo e faz o multiplayer 
 ## Mecânicas
 
 - **E** — esquiva. Quando um golpe vem, aparece um "E" na tela; se apertar quando ele fica **verde**, é ESQUIVA PERFEITA: câmera lenta, invencível, e o próximo golpe é um contra-ataque (x1.5).
-- **F** — defesa (apertar bem na hora do golpe = parry; parry numa bola de energia rebate ela).
+- **F** — defesa (apertar bem na hora do golpe = parry).
 - **Energia** (barra embaixo da vida): enche batendo, apanhando, defendendo, com parry e esquiva perfeita.
-- **Q** — bola de energia (35). **R** — super soco voador (barra cheia, quebra defesa).
+- **Q** — habilidade do seu lutador (35). **R** — super soco voador na cor do lutador (barra cheia, quebra defesa).
+  - **Bárbaro — Terremoto:** pula e soca o chão; a onda (espetos de pedra, rachaduras) derruba quem está perto. Pule pra escapar.
+  - **Cavaleiro — Investida Sagrada:** avança com um escudo de luz que segura golpes de frente.
+  - **Ladina — Passo Sombrio:** some na fumaça e aparece atrás do oponente com uma facada.
+  - **Mago — Meteoro:** marca um círculo no chão e um meteoro em chamas cai ali. Saia do círculo!
+- **Botão do meio do mouse / T** — trava a mira no oponente (ajuda leve; aparece um pontinho vermelho nele).
 - **F11** / **Alt+Enter** — tela cheia.
 
 ## Online 1v1
@@ -40,7 +45,7 @@ Como sincroniza: cada um simula o próprio lutador (zero atraso no seu movimento
 | `src/bot.js` | IA: gera o mesmo input que o jogador (fácil/normal/difícil) |
 | `src/rig.js` | Personagens KayKit + mistura de animações (corpo de cima/baixo) sincronizada com os golpes. Em 1ª pessoa, uma cópia só com os braços vai presa na câmera |
 | `assets/kaykit/` | Bárbaro, Cavaleiro, Ladina, Mago — KayKit Adventurers (Kay Lousberg, CC0) |
-| `assets/kaykit/extra_anims.glb` | Animações feitas no Blender pro rig KayKit: guarda/jab/direto de 1ª pessoa e uppercut (pesado) |
+| `assets/kaykit/extra_anims.glb` | Animações feitas no Blender pro rig KayKit: guarda/jab/direto de 1ª pessoa, uppercut (pesado) e as habilidades (Ground_Slam, Shield_Charge, Meteor_Call) |
 | `tools/fp_anims.py` | Gera o `extra_anims.glb`: `blender -b --factory-startup --python tools/fp_anims.py` (IK nas mãos sobre a Unarmed_Idle, assado quadro a quadro; imprime onde as mãos caem na tela) |
 | `check.html` | Folha de poses de cada personagem + checagem de pés/altura (`?c=Knight`) |
 | `src/arena.js` | Cenário + colisão com borda/pilares |

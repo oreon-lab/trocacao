@@ -47,9 +47,8 @@ export const T = {
   counterMul: 1.5,
   // energia (0-100) e poderes
   meterMax: 100,
-  costQ: 35,            // Q: bola de energia
+  costQ: 35,            // Q: habilidade do lutador
   costR: 100,           // R: super soco
-  projSpeed: 17,
   parryWindow: 0.15,
   assistCone: 0.85,     // cos do ângulo da mira assistida (~32°)
   assistRange: 1.4,     // alcance extra em que a mira assistida "puxa" o soco
@@ -63,8 +62,20 @@ export const ATTACKS = {
   light: { windup: 0.09, active: 0.09, recovery: 0.16, dmg: 6, range: 2.3, hitR: 0.42, knock: 3.5, up: 0, stun: 0.34 },
   heavy: { windup: 0.34, active: 0.1, recovery: 0.38, dmg: 16, range: 2.6, hitR: 0.45, knock: 11, up: 3, stun: 0.55, guardBreak: true, moveMul: 0.4 },
   lunge: { windup: 0.03, active: 0.12, recovery: 0.28, dmg: 11, range: 2.6, hitR: 0.45, knock: 9, up: 1.5, stun: 0.4 },
-  cast: { windup: 0.2, active: 0.05, recovery: 0.3, dmg: 0, range: 0, hitR: 0, knock: 0, up: 0, stun: 0, ranged: true, moveMul: 0.5 },
-  proj: { dmg: 12, range: 0, hitR: 0.35, knock: 7, up: 1.5, stun: 0.45 },
   super: { windup: 0.45, active: 0.18, recovery: 0.5, dmg: 26, range: 2.7, hitR: 0.6, knock: 16, up: 7, stun: 0.9, guardBreak: true, moveMul: 0.2 },
+  // habilidades (Q) — special: sem o passinho automático; cada uma tem o próprio movimento no fighter
+  slam: { windup: 0.5, active: 0.06, recovery: 0.5, dmg: 17, radius: 4.6, knock: 10, up: 7, stun: 0.7, aoe: true, low: true, special: true, moveMul: 0.25 },
+  charge: { windup: 0.2, active: 0.5, recovery: 0.4, dmg: 14, range: 1.9, hitR: 0.7, knock: 15, up: 4, stun: 0.7, guardBreak: true, armor: true, special: true, speed: 16, moveMul: 0.1 },
+  blink: { windup: 0.16, active: 0.36, hitDelay: 0.16, recovery: 0.35, dmg: 15, range: 2.3, hitR: 0.55, knock: 8, up: 2, stun: 0.6, guardBreak: true, special: true, moveMul: 0.3 },
+  meteor: { windup: 0.4, active: 0.05, recovery: 0.35, ranged: true, special: true, moveMul: 0.4 },
+  meteorHit: { dmg: 18, radius: 2.3, delay: 0.95, knock: 10, up: 7, stun: 0.65 },
   sweep: { windup: 0.04, active: 0.15, recovery: 0.35, dmg: 10, range: 2.2, hitR: 0.55, knock: 4, up: 8.5, stun: 0.7, low: true },
+};
+
+// habilidade própria de cada lutador (Q) e a cor do tema dele (efeitos da habilidade e do super)
+export const SPECIALS = {
+  Barbarian: { kind: 'slam', name: 'TERREMOTO', color: 0xff7a2f },
+  Knight: { kind: 'charge', name: 'INVESTIDA SAGRADA', color: 0xffd23f },
+  Rogue: { kind: 'blink', name: 'PASSO SOMBRIO', color: 0xa05cff },
+  Mage: { kind: 'meteor', name: 'METEORO', color: 0x4fc8ff },
 };

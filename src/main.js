@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { T, ATTACKS } from './config.js';
-import { Fighter, events, damp, clamp, segSeg } from './fighter.js';
+import { T, ATTACKS, SPECIALS } from './config.js';
+import { Fighter, events, damp, clamp } from './fighter.js';
 import { Rig, loadCharacters, CHARACTERS } from './rig.js';
 import { createArena } from './arena.js';
 import { PlayerInput, keyName } from './input.js';
@@ -84,6 +84,9 @@ function setCharacters(foeChar) {
   fpRig = new Rig(settings.char, { firstPerson: true });
   scene.add(pRig.root, eRig.root);
   fpHolder.add(fpRig.root);
+  player.char = settings.char;
+  enemy.char = botChar;
+  $('skQname').textContent = `${SPECIALS[settings.char].name} ${T.costQ}`;
   $('pName').textContent = CHARACTERS[settings.char].toUpperCase();
   $('eName').textContent = CHARACTERS[botChar].toUpperCase() + (foeChar ? ' (ONLINE)' : ' (BOT)');
 }
@@ -132,7 +135,7 @@ input.onLock = () => {
   S.lockOn = !S.lockOn;
   sfx.jump(0.6);
 };
-const canLock = () => S.state === 'fight' && !enemy.ko && !player.ko && player.pos.distanceTo(enemy.pos) < 30;
+const canLock = () => S.state === 'fight' && !enemy.ko && !player.ko && player.pos.distanceTo(enemy.pos) < 22;
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const _lk = new THREE.Vector3();
 function lockOnCamera(dt) {
@@ -141,16 +144,18 @@ function lockOnCamera(dt) {
   // mira no peito do oponente a partir da câmera (em 3ª pessoa ela fica no ombro)
   _lk.set(enemy.pos.x - camera.position.x, enemy.pos.y + enemy.height * 0.6 - camera.position.y, enemy.pos.z - camera.position.z);
   const yawT = Math.atan2(-_lk.x, -_lk.z), pitchT = Math.atan2(_lk.y, Math.hypot(_lk.x, _lk.z)) - (S.tps ? 0.08 : 0);
-  const k = 1 - Math.exp(-7 * settings.lockPull * dt); // mola: segue rápido, mas não crava
-  input.yaw += wrap(yawT - input.yaw) * k;
-  input.pitch += (clamp(pitchT, -0.8, 0.8) - input.pitch) * k;
+  // ajuda leve: não puxa perto do centro (zona morta), puxa devagar e com giro máximo -> não vira mira automática
+  const k = 1 - Math.exp(-2.6 * settings.lockPull * dt), max = 2.2 * settings.lockPull * dt, dead = 0.1;
+  const dy = wrap(yawT - input.yaw), ey = Math.sign(dy) * Math.max(0, Math.abs(dy) - dead);
+  input.yaw += clamp(ey * k, -max, max);
+  input.pitch += clamp((clamp(pitchT, -0.8, 0.8) - input.pitch) * k * 0.5, -max, max);
 }
 function updateLockMark() {
   const el = $('lock');
   el.classList.toggle('on', !!S.lockOn);
   if (!S.lockOn) return;
   _v.set(enemy.pos.x, enemy.pos.y + enemy.height * 0.6, enemy.pos.z).project(camera);
-  el.style.transform = `translate(${(_v.x * 0.5 + 0.5) * innerWidth}px, ${(-_v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-50%) rotate(${performance.now() * 0.12}deg)`;
+  el.style.transform = `translate(${(_v.x * 0.5 + 0.5) * innerWidth}px, ${(-_v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-50%)`;
 }
 const winsNeeded = () => (S.online ? 2 : settings.rounds);
 function makePips() {
@@ -174,7 +179,7 @@ const menu = initMenu({
 });
 function toHome() {
   S.state = 'menu';
-  while (projs.length) removeProj(0, false);
+  clearHazards();
   setCharacters();
   menu.show('home');
 }
@@ -259,7 +264,7 @@ const NET = {
     player.gain(m.res === 'hit' ? 7 : m.res === 'break' ? 6 : m.res === 'block' ? 2 : 0);
     events.push({ type: m.res, f: player, victim: enemy, kind: m.kind, point: new THREE.Vector3(...m.p), dmg: def.dmg, combo: m.combo });
   },
-  fire: m => spawnProj(enemy, m), // bola do oponente (só visual; quem acerta é decidido por ele)
+  fire: m => spawnMeteor(enemy, m), // meteoro do oponente (só visual; quem acerta é decidido por ele)
   left: () => goOffline('O oponente saiu.'),
   close: () => S.online || net ? goOffline('Conexão perdida.') : null,
 };
@@ -288,7 +293,7 @@ function startRound() {
   input.pitch = 0;
   bot.reset(Math.PI);
   remote.buf.length = 0;
-  while (projs.length) removeProj(0, false);
+  clearHazards();
   Object.assign(S, { lockOn: false, state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
   banner(`ROUND ${S.round}`);
   sfx.bell();
@@ -363,9 +368,10 @@ function updatePips() {
   document.querySelectorAll('#eWins i').forEach((el, i) => el.classList.toggle('on', S.wins[1] > i));
 }
 const pops = [];
-function popText(p, text, cls = '') {
+function popText(p, text, cls = '', color) {
   const el = document.createElement('div');
   el.className = 'pop ' + cls;
+  if (color !== undefined) el.style.color = hex(color);
   el.textContent = text;
   hud.pops.appendChild(el);
   pops.push({ el, p: p.clone(), t: 0, dx: (Math.random() - 0.5) * 40 });
@@ -420,13 +426,15 @@ function updateHUD(dt) {
 const WARN = {
   light: ['#ffd23f', 'DEFENDA!'], lunge: ['#ffd23f', 'INVESTIDA!'],
   heavy: ['#ff4b3e', 'DESVIE!'], sweep: ['#b06bff', 'PULE!'],
-  super: ['#b06bff', 'SUPER! ESQUIVA!'], cast: ['#7fd8ff', 'ENERGIA!'],
+  super: ['#b06bff', 'SUPER! ESQUIVA!'],
+  slam: ['#ff7a2f', 'PULE!'], charge: ['#ffd23f', 'ESQUIVA!'], blink: ['#a05cff', 'ATRÁS DE VOCÊ!'],
+  meteor: ['#4fc8ff', 'METEORO!'], meteorHit: ['#ff6a2f', 'SAIA DO CÍRCULO!'],
 };
 function threat() {
   const e = enemy, p = player;
   if (S.state !== 'fight' || e.ko || p.ko) return null;
   const dx = p.pos.x - e.pos.x, dz = p.pos.z - e.pos.z, d = Math.hypot(dx, dz);
-  if (p.incoming > 0) return { kind: 'cast', k: 1 };
+  if (p.danger) return { kind: 'meteorHit', k: p.incoming > 0 ? 1 : 0.6 };
   if (e.tell) return { kind: e.tell.kind, k: Math.min(1, e.tell.el / e.tell.total) };
   if (e.atk?.phase === 'windup') return { kind: e.atk.kind, k: e.atk.t / e.atk.def.windup };
   if (e.sliding && d < 6) return { kind: 'sweep', k: clamp(1 - (d - 2) / 4, 0, 1) };
@@ -478,106 +486,132 @@ function springs(dt) {
   }
 }
 
-// ---------- bolas de energia (Q) ----------
-// Quem joga simula a bola e decide se acertou (online, manda 'hit' com kind 'proj').
-// Defesa reduz o dano, E na hora certa esquiva perfeito, e PARRY rebate a bola de volta.
-const projs = [];
-const projGeo = new THREE.SphereGeometry(0.2, 16, 12), glowGeo = new THREE.SphereGeometry(0.34, 16, 12), sparkGeo = new THREE.SphereGeometry(0.05, 6, 4);
-const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const _pa = new THREE.Vector3(), _pb = new THREE.Vector3();
-function spawnProj(owner, net0) {
-  const target = owner === player ? enemy : player;
-  let pos, dir;
-  if (net0) { pos = new THREE.Vector3(...net0.p); dir = new THREE.Vector3(...net0.d); }
+// ---------- Meteoro (Q do Mago) ----------
+// Quem joga simula e decide se acertou (online manda 'hit' kind 'meteorHit'); o outro lado só desenha.
+// Cai onde o alvo vai estar (prevê um pouco); sair do círculo, pular alto ou esquivar na hora salva.
+const hazards = [];
+function spawnMeteor(owner, net0) {
+  const foe = owner === player ? enemy : player, H = ATTACKS.meteorHit;
+  let target;
+  if (net0) target = new THREE.Vector3(...net0.p);
   else {
-    dir = owner.lookDir(new THREE.Vector3());
-    const d = owner.inCone(target, 22, 0.85); // mira assistida leve
-    if (d) dir.set(target.pos.x - owner.pos.x, target.pos.y + target.height * 0.55 - owner.eyeY + 0.2, target.pos.z - owner.pos.z).normalize();
-    pos = new THREE.Vector3(owner.pos.x, owner.eyeY - 0.2, owner.pos.z).addScaledVector(dir, 0.7);
-    if (S.online && owner === player) net.send({ t: 'fire', p: pos.toArray(), d: dir.toArray() });
+    target = owner.inCone(foe, 22, 0.5)
+      ? new THREE.Vector3(foe.pos.x + foe.vel.x * 0.3, 0, foe.pos.z + foe.vel.z * 0.3)
+      : owner.forward(new THREE.Vector3()).multiplyScalar(9).add(owner.pos).setY(0);
+    const r = Math.hypot(target.x, target.z), lim = arena.R - 1;
+    if (r > lim) target.multiplyScalar(lim / r);
+    if (S.online && owner === player) net.send({ t: 'fire', p: target.toArray() });
   }
-  const color = owner === player ? 0x7fd8ff : 0xff7a5c;
-  // núcleo branco + casca colorida + halo + 3 faíscas orbitando; rastro sai em updateProjs
-  const mesh = new THREE.Mesh(projGeo, coreMat);
-  const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
-  const halo = fx.glow(color, 1.5, 0.75);
-  const sparks = [0, 1, 2].map(() => new THREE.Mesh(sparkGeo, coreMat));
-  mesh.add(glow, halo, ...sparks);
-  mesh.position.copy(pos);
-  scene.add(mesh);
-  fx.flash(pos, color, 1.4);
-  fx.ring(pos, color, 0.9);
-  projs.push({ owner, mesh, glow, halo, sparks, color, vel: dir.multiplyScalar(T.projSpeed), life: 1.6, visual: !!net0, trailT: 0 });
+  fx.meteor(target, H.radius, H.delay, theme(owner), owner.pos);
+  sfx.whistle(H.delay, vol(owner));
+  hazards.push({ owner, target, t: 0, visual: !!net0 });
 }
-function removeProj(i, burst = true) {
-  const p = projs[i];
-  if (burst) fx.explode(p.mesh.position.clone(), p.color);
-  scene.remove(p.mesh);
-  p.glow.material.dispose();
-  p.halo.material.dispose();
-  projs.splice(i, 1);
+function clearHazards() {
+  hazards.length = 0; // os efeitos visuais terminam sozinhos
+  player.danger = enemy.danger = null;
 }
-function updateProjs(dt) {
-  for (let i = projs.length - 1; i >= 0; i--) {
-    const p = projs[i], m = p.mesh;
-    m.position.addScaledVector(p.vel, dt);
-    const t = performance.now() * 0.001;
-    p.glow.scale.setScalar(1 + Math.sin(t * 30) * 0.15);
-    p.halo.scale.setScalar(1.4 + Math.sin(t * 22) * 0.2);
-    p.sparks.forEach((s, j) => { const a = t * 14 + j * 2.1; s.position.set(Math.cos(a) * 0.42, Math.sin(a * 1.3) * 0.3, Math.sin(a) * 0.42); });
-    if ((p.trailT -= dt) <= 0) { p.trailT = 0.018; fx.puff(m.position, p.color, 0.6, 0.25); }
-    const target = p.owner === player ? enemy : player;
-    const pos = m.position;
-    if ((p.life -= dt) <= 0 || pos.y < 0 || Math.hypot(pos.x, pos.z) > arena.R || arena.pillars.some(q => Math.hypot(pos.x - q.x, pos.z - q.z) < q.r + 0.2)) { removeProj(i); continue; }
-    if (target.ko) continue;
-    // distância até a cápsula do alvo
-    _pa.set(target.pos.x, target.pos.y + T.radius, target.pos.z);
-    _pb.set(target.pos.x, target.pos.y + target.height - T.radius, target.pos.z);
-    const dist = segSeg(pos, pos, _pa, _pb, _v) - T.radius - ATTACKS.proj.hitR;
-    if (dist / T.projSpeed < T.perfectWindow) target.incoming = 0.05; // janela da esquiva perfeita
-    if (dist > 0 || target.invuln) continue;
-    if (p.visual) { removeProj(i); continue; } // bola do oponente online: quem decide é ele
-    if (target.remote) { net.send({ t: 'hit', kind: 'proj', pos: pos.toArray() }); removeProj(i); continue; }
-    const res = target.receive({ pos: pos.clone(), vel: new THREE.Vector3(), stunT: 0, atk: null }, ATTACKS.proj);
-    events.push({ type: res, f: p.owner, victim: target, kind: 'proj', point: pos.clone(), dmg: ATTACKS.proj.dmg });
-    if (res === 'parry') { // rebate!
-      p.owner = target;
-      p.vel.negate().multiplyScalar(1.25);
-      p.color = target === player ? 0x7fd8ff : 0xff7a5c;
-      p.glow.material.color.set(p.color);
-      p.halo.material.color.set(p.color);
-      fx.flash(pos, 0x7fffe8, 2);
-      p.life = 1.6;
-      continue;
-    }
-    p.owner.gain(res === 'hit' ? 7 : 2);
-    removeProj(i);
+function updateHazards(dt) {
+  const H = ATTACKS.meteorHit;
+  for (let i = hazards.length - 1; i >= 0; i--) {
+    const h = hazards[i], target = h.owner === player ? enemy : player;
+    h.t += dt;
+    const inside = Math.hypot(target.pos.x - h.target.x, target.pos.z - h.target.z) < H.radius + T.radius && target.pos.y < 2.5;
+    if (inside) target.danger = h.target; else if (target.danger === h.target) target.danger = null;
+    if (inside && H.delay - h.t < T.perfectWindow) target.incoming = 0.05; // janela da esquiva perfeita
+    if (h.t < H.delay) continue;
+    hazards.splice(i, 1);
+    if (target.danger === h.target) target.danger = null;
+    fx.meteorImpact(h.target);
+    sfx.explosion(vol(h.owner));
+    S.trauma = Math.min(1, S.trauma + 0.9 * clamp(1 - player.pos.distanceTo(h.target) / 14, 0, 1));
+    arena.hype(0.6);
+    if (h.visual || !inside || target.ko || target.invuln) continue;
+    if (target.remote) { net.send({ t: 'hit', kind: 'meteorHit', pos: h.target.toArray() }); continue; }
+    const res = target.receive({ pos: h.target.clone(), vel: new THREE.Vector3(), stunT: 0, atk: null }, H);
+    events.push({ type: res, f: h.owner, victim: target, kind: 'meteorHit', point: target.pos.clone().setY(target.pos.y + 1), dmg: H.dmg });
+    h.owner.gain(res === 'hit' ? 7 : 2);
   }
 }
 
-// ---------- super: círculo mágico, coluna de luz, aura ----------
-const PURPLE = 0xb06bff;
+// ---------- efeitos das habilidades e do super ----------
+// Lidos do estado do golpe (começou / saiu do windup), então valem igual pro oponente online.
+const theme = f => SPECIALS[f.char]?.color ?? 0xb06bff;
+const hex = c => '#' + c.toString(16).padStart(6, '0');
 function flashScreen(a, color = '#fff') {
   const el = $('flash');
   el.style.background = color;
   el.animate([{ opacity: a }, { opacity: 0 }], { duration: 350, easing: 'ease-out' });
 }
-function superFx(f) {
-  f.superSeen = f.atk?.id;
-  fx.magicCircle(f, PURPLE, ATTACKS.super.windup + ATTACKS.super.active + 0.3);
-  fx.pillar(f.pos, PURPLE);
-  fx.groundRing(f.pos, PURPLE, 3.5);
-  fx.burst(f.pos.clone().setY(1), PURPLE, 18, 5);
-  flashScreen(f === player ? 0.35 : 0.2, '#e6ccff');
+const chest = f => new THREE.Vector3(f.pos.x, f.pos.y + f.height * 0.6, f.pos.z);
+function onAttackStart(f, a, col) {
+  const v = vol(f), head = f.pos.clone().setY(f.pos.y + 2.3);
+  if (a.def.special) popText(head, SPECIALS[f.char].name + '!', 'big', col);
+  switch (a.kind) {
+    case 'super':
+      fx.magicCircle(f, col, a.def.windup + a.def.active + 0.3);
+      fx.pillar(f.pos, col);
+      fx.groundRing(f.pos, col, 3.5);
+      fx.burst(chest(f), col, 18, 5);
+      flashScreen(f === player ? 0.35 : 0.2, hex(col));
+      sfx.guardBreak(v);
+      popText(head, 'SUPER!', 'big', col);
+      S.trauma = Math.min(1, S.trauma + 0.25);
+      arena.hype(0.5);
+      break;
+    case 'slam': fx.groundRing(f.pos, col, 1.4, 0.3); fx.dust(f.pos, 6); sfx.jump(v); break;
+    case 'charge': fx.crossFlash(chest(f), 1.5); fx.rays(chest(f), col, 12, 2.2); fx.groundRing(f.pos, col, 2.2); sfx.chime(v); break;
+    case 'blink': f.blinkFrom = f.pos.clone(); fx.smoke(f.pos, col); sfx.poof(v); break;
+    case 'meteor': fx.magicCircle(f, col, a.def.windup + 0.3); fx.pillar(f.pos, col); sfx.chime(v * 0.8); break;
+  }
 }
-function updateAuras(sim) {
+function onAttackActive(f, a, col) {
+  const v = vol(f);
+  switch (a.kind) {
+    case 'slam': {
+      fx.slam(f.pos, col, a.def.radius);
+      sfx.boom(v);
+      const near = clamp(1 - player.pos.distanceTo(f.pos) / 12, 0, 1);
+      S.trauma = Math.min(1, S.trauma + (f === player ? 0.6 : 0.9 * near));
+      if (f === player || near > 0.3) camKick(0.04, 0, (Math.random() - 0.5) * 0.06);
+      arena.hype(0.8);
+      break;
+    }
+    case 'blink':
+      fx.smoke(f.pos, col);
+      if (f.blinkFrom) fx.shadowTrail(f.blinkFrom, f.pos, col, f.height);
+      sfx.poof(v);
+      break;
+    case 'charge': sfx.dash(v); break;
+  }
+}
+// acerto das habilidades: cada uma com a sua cara
+function abilityHit(e, col) {
+  if (e.kind === 'charge') { fx.holy(e.point, col); sfx.ding(vol(e.f)); }
+  if (e.kind === 'blink') { fx.backstab(e.point, col); sfx.slash(vol(e.f)); }
+}
+function watchAttacks(sim) {
   for (const f of [player, enemy]) {
-    const a = f.atk, on = a?.kind === 'super' && a.phase !== 'recovery';
-    if (on && f.remote && f.superSeen !== a.id) superFx(f); // oponente online não gera o evento aqui
-    if (on && (f.auraT = (f.auraT || 0) - sim) <= 0) {
-      f.auraT = 0.02;
-      fx.aura(f, PURPLE);
-      if (a.phase === 'active') fx.ghost(f, PURPLE);
+    const a = f.atk, col = theme(f);
+    if (a && a.id !== f.fxId) { f.fxId = a.id; f.fxPhase = 'windup'; onAttackStart(f, a, col); }
+    if (a && f.fxPhase === 'windup' && a.phase !== 'windup') { f.fxPhase = a.phase; onAttackActive(f, a, col); }
+    // escudo sagrado enquanto o Cavaleiro investe
+    const charging = a?.kind === 'charge' && a.phase !== 'recovery';
+    if (charging && !f.shield) f.shield = fx.shield(col);
+    if (f.shield) {
+      if (charging) fx.shieldUpdate(f.shield, f, sim);
+      else { fx.shieldOff(f.shield, col, a?.hit); f.shield = null; }
+    }
+    // rastros contínuos
+    if (sim > 0 && a && (f.fxT = (f.fxT || 0) - sim) <= 0) {
+      f.fxT = 0.02;
+      if (a.kind === 'super' && a.phase !== 'recovery') { fx.aura(f, col); if (a.phase === 'active') fx.ghost(f, col); }
+      if (a.kind === 'meteor' && a.phase === 'windup') fx.aura(f, col);
+      if (a.kind === 'slam' && a.phase === 'windup') fx.aura(f, col);
+      if (charging && a.phase === 'active' && !a.hit) {
+        fx.ghost(f, col);
+        fx.puff(new THREE.Vector3(f.pos.x + (Math.random() - 0.5) * 0.6, f.pos.y + 0.3 + Math.random() * 1.2, f.pos.z + (Math.random() - 0.5) * 0.6), col, 0.5, 0.35);
+        if (f.grounded) fx.dust(f.pos, 1);
+      }
     }
   }
   document.body.classList.toggle('charging', player.atk?.kind === 'super' && player.atk.phase === 'windup');
@@ -590,11 +624,12 @@ function handleEvents() {
     const v = vol(e.f), mine = e.victim === player;
     switch (e.type) {
       case 'hit': {
-        const heavy = e.kind !== 'light', sup = e.kind === 'super';
-        S.hitstop = Math.max(S.hitstop, sup ? 0.2 : heavy ? 0.11 : 0.055);
-        fx.burst(e.point, sup ? 0xb06bff : heavy ? 0xffd23f : 0xffffff, sup ? 30 : heavy ? 16 : 9, sup ? 14 : heavy ? 9 : 6);
-        fx.starBurst(e.point, sup ? 1.4 : heavy ? 0.85 : 0.5, sup ? 0xb06bff : heavy ? 0xffd23f : 0xffffff);
-        if (sup) { fx.explode(e.point, 0xb06bff, true); fx.groundRing(e.victim.pos, 0xb06bff, 6, 0.6); flashScreen(mine ? 0.6 : 0.4, '#e6ccff'); }
+        const heavy = e.kind !== 'light', sup = e.kind === 'super', col = theme(e.f), hot = sup || ATTACKS[e.kind]?.special;
+        S.hitstop = Math.max(S.hitstop, sup ? 0.2 : hot ? 0.14 : heavy ? 0.11 : 0.055);
+        fx.burst(e.point, hot ? col : heavy ? 0xffd23f : 0xffffff, sup ? 30 : heavy ? 16 : 9, sup ? 14 : heavy ? 9 : 6);
+        fx.starBurst(e.point, sup ? 1.4 : heavy ? 0.85 : 0.5, hot ? col : heavy ? 0xffd23f : 0xffffff);
+        if (sup) { fx.explode(e.point, col, true); fx.groundRing(e.victim.pos, col, 6, 0.6); flashScreen(mine ? 0.6 : 0.4, '#fff'); }
+        abilityHit(e, col);
         sfx.hit(heavy, mine ? 1 : 0.85);
         if (settings.dmgNumbers) popText(e.point, e.dmg, heavy ? 'big' : '');
         if (e.counter) popText(e.point.clone().setY(e.point.y + 0.7), 'CONTRA-ATAQUE!', 'big cyan');
@@ -612,14 +647,23 @@ function handleEvents() {
         popText(e.f.pos.clone().setY(e.f.pos.y + 2), e.f === player ? 'ESQUIVA PERFEITA!' : 'ESQUIVOU!', 'big cyan');
         if (e.f === player) { if (!S.online) S.slowT = 0.55; camZoom(6); }
         break;
-      case 'superStart':
-        sfx.guardBreak(v);
-        superFx(e.f);
-        popText(e.f.pos.clone().setY(e.f.pos.y + 2.2), 'SUPER!', 'big orange');
-        S.trauma = Math.min(1, S.trauma + 0.25);
-        arena.hype(0.5);
+      case 'fire': spawnMeteor(e.f); break;
+      case 'blink': // a Ladina apareceu atrás: a câmera do jogador gira rápido pro oponente
+        if (e.f === player) {
+          S.turn = wrap(Math.atan2(-(enemy.pos.x - player.pos.x), -(enemy.pos.z - player.pos.z)) - input.yaw);
+          S.turnT = 0.12;
+        }
         break;
-      case 'fire': spawnProj(e.f); sfx.dash(v); break;
+      case 'shield': { // golpe bateu no escudo sagrado
+        const col = theme(e.victim);
+        sfx.ding(v);
+        fx.flash(e.point, col, 1.6);
+        fx.shards(e.point, col, 8);
+        fx.rays(e.point, col, 8, 1.4, 0.25);
+        popText(e.point, 'ESCUDO!', 'big', col);
+        S.hitstop = Math.max(S.hitstop, 0.06);
+        break;
+      }
       case 'noMeter': if (e.f === player) { const el = $('skills'); el.querySelectorAll('div').forEach(d => { d.classList.remove('deny'); void d.offsetWidth; d.classList.add('deny'); }); } break;
       case 'block':
         sfx.block(v);
@@ -637,6 +681,7 @@ function handleEvents() {
         arena.hype(0.6);
         break;
       case 'break':
+        abilityHit(e, theme(e.f));
         sfx.guardBreak(v);
         S.hitstop = 0.12;
         fx.starBurst(e.point, 0.9, 0xff8a3d);
@@ -739,7 +784,7 @@ player.reset(new THREE.Vector3(0, 0, 7), 0);
 enemy.reset(new THREE.Vector3(0, 0, -7), Math.PI);
 
 // ?debug no endereço expõe o estado pra testes no console
-if (location.search.includes('debug')) window.game = { S, menu, settings, fx, spawnProj, superFx, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
+if (location.search.includes('debug')) window.game = { S, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
 
 // resolução adaptativa: se o frame passa de ~20ms por um tempo, baixa a resolução interna; se sobra, sobe
 const maxPR = () => Math.min(devicePixelRatio, 2) * settings.resScale;
@@ -783,8 +828,8 @@ requestAnimationFrame(loop);
         if (!S.online) enemy.update(h, player, arena);
         separate(player, enemy);
       }
-      updateProjs(sim);
-      updateAuras(sim);
+      updateHazards(sim);
+      watchAttacks(sim);
     }
     if (S.online && (S.netT -= dt) <= 0) {
       S.netT = 1 / 30;
@@ -800,6 +845,7 @@ requestAnimationFrame(loop);
   } else if (!playing) animDt = dt;
 
   if (running) lockOnCamera(dt); // pausado não puxa
+  if (running && S.turnT > 0) { const st = Math.min(dt, S.turnT); input.yaw += (S.turn * st) / 0.12; S.turnT -= st; } // giro do Passo Sombrio
   // a mira responde mesmo no hitstop (3ª pessoa: mira no ponto da cruz; 1ª pessoa: igual à câmera)
   if (S.tps && playing) tpsAim();
   else { player.input.yaw = input.yaw; player.input.pitch = input.pitch; }

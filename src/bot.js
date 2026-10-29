@@ -1,4 +1,4 @@
-import { T, ATTACKS } from './config.js';
+import { T, ATTACKS, SPECIALS } from './config.js';
 import { clamp, damp } from './fighter.js';
 
 // turn = velocidade de giro (rad/s): dá pra "sair da mira" do bot com dash
@@ -31,6 +31,7 @@ export class Bot {
 
     const dx = foe.pos.x - me.pos.x, dz = foe.pos.z - me.pos.z, dist = Math.hypot(dx, dz);
     const want = Math.atan2(-dx, -dz);
+    if (me.atk?.kind === 'blink') this.yaw = I.yaw; // Passo Sombrio já deixa virado pro alvo
     const turn = L.turn * (me.stunT > 0 ? 0.3 : 1);
     this.yaw += clamp(wrap(want - this.yaw), -turn * dt, turn * dt);
     this.pitch = damp(this.pitch, Math.atan2(foe.pos.y + foe.height * 0.62 - me.eyeY, Math.max(dist, 0.5)), 10, dt);
@@ -48,6 +49,12 @@ export class Bot {
         this.reaction = Math.random() < L.block / (L.block + L.dodge) ? 'block' : 'dodge';
         if (fa.def.guardBreak && Math.random() < 0.6) this.reaction = 'dodge';
       }
+    }
+    // habilidades do jogador: pula o Terremoto, esquiva da investida e do Passo Sombrio
+    if (fa?.def.special && fa.phase === 'windup' && this.seen !== fa) {
+      this.seen = fa;
+      const r = fa.kind === 'slam' ? (dist < 5.5 ? 'jump' : null) : fa.kind === 'charge' || fa.kind === 'blink' ? 'dodge' : null;
+      if (r && Math.random() < L.react) { this.reactT = rand(...L.delay) * 0.6; this.reaction = r; }
     }
     if (foe.sliding && !this.seenSlide && dist < 6) {
       this.seenSlide = true;
@@ -123,12 +130,27 @@ export class Bot {
     }
     me.tell = this.tell;
 
-    // poderes: super quando a barra enche e o jogador tá perto; bola de energia de média distância
-    if (!me.atk && facing && me.stunT <= 0) {
-      if (me.meter >= T.costR && dist < 5 && Math.random() < dt * 1.5 * L.aggro) I.r = true;
-      else if (me.meter >= T.costQ && dist > 5 && dist < 14 && Math.random() < dt * 0.5 * L.aggro) I.q = true;
+    // meteoro caindo em cima: sai do círculo (e dá dash se estiver bem no meio)
+    if (me.danger !== this.dangerSeen) { this.dangerSeen = me.danger; this.flee = !!me.danger && Math.random() < L.react + 0.25; }
+    if (me.danger && this.flee) {
+      const ax = me.pos.x - me.danger.x, az = me.pos.z - me.danger.z, al = Math.hypot(ax, az);
+      if (al < 0.05) { I.mx = this.dir; I.mz = 0; }
+      else {
+        const s = Math.sin(me.yaw), c = Math.cos(me.yaw);
+        I.mz = (-ax * s - az * c) / al;
+        I.mx = (ax * c - az * s) / al;
+      }
+      if (al < 1.2 && me.charges > 0 && Math.random() < dt * 4) { I.dash = true; I.dashX = I.mx; I.dashZ = I.mz; }
     }
-    // bola de energia vindo: defende ou esquiva
+
+    // poderes: super quando a barra enche e o jogador tá perto; habilidade na distância em que ela funciona
+    if (!me.atk && facing && me.stunT <= 0) {
+      const sp = SPECIALS[me.char]?.kind;
+      const ok = sp === 'slam' ? dist < 4.2 && foe.grounded : sp === 'charge' ? dist > 2.5 && dist < 9 : sp === 'blink' ? dist > 3 && dist < 11 : dist > 4 && dist < 18;
+      if (me.meter >= T.costR && dist < 5 && Math.random() < dt * 1.5 * L.aggro) I.r = true;
+      else if (me.meter >= T.costQ && ok && Math.random() < dt * 0.6 * L.aggro) I.q = true;
+    }
+    // meteoro quase caindo: defende ou esquiva
     if (me.incoming > 0 && this.blockT <= 0 && Math.random() < L.react * dt * 8) {
       if (Math.random() < 0.5) this.blockT = 0.4; else I.dodge = true;
     }

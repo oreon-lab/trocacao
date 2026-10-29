@@ -23,6 +23,16 @@ for s, sx in (('l', 1), ('r', -1)):
     c.target, c.pole_target, c.chain_count = T[s], P[s], 2
     IK[s] = c
 
+# IK nas pernas (só nos clipes com legs=True): pés plantados quando o quadril desce
+LEG = {}
+for s, sx in (('l', 1), ('r', -1)):
+    ft = bpy.data.objects.new('F_' + s, None); scene.collection.objects.link(ft)
+    kp = bpy.data.objects.new('K_' + s, None); scene.collection.objects.link(kp)
+    kp.location = (sx * 0.15, -0.9, 0.45)  # joelho pra frente
+    c = arm.pose.bones['lowerleg.' + s].constraints.new('IK')
+    c.target, c.pole_target, c.chain_count, c.influence = ft, kp, 2, 0.0
+    LEG[s] = (ft, kp, c)
+
 def set_action(act):
     ad = arm.animation_data or arm.animation_data_create()
     ad.action = act
@@ -40,6 +50,24 @@ for s in ('l', 'r'):
         d = (e - P[s].location).length
         if best is None or d < best[0]: best = (d, ang)
     IK[s].pole_angle = math.radians(best[1])
+# pés: posição de descanso no quadro 0 da Unarmed_Idle; escolhe o pole_angle do joelho
+vl.update()
+for s in ('l', 'r'):  # alvos primeiro (a busca abaixo mexe no quadril)
+    LEG[s][0].location = arm.matrix_world @ arm.pose.bones['lowerleg.' + s].tail
+for s in ('l', 'r'):
+    ft, kp, c = LEG[s]
+    c.influence = 1.0
+    best = None
+    for ang in (0, 90, -90, 180):
+        c.pole_angle = math.radians(ang)
+        arm.pose.bones['hips'].location = arm.pose.bones['hips'].bone.matrix_local.inverted().to_3x3() @ Vector((0, 0, -0.3))  # testa agachado
+        vl.update()
+        k = arm.matrix_world @ arm.pose.bones['lowerleg.' + s].head
+        d = (k - kp.location).length
+        if best is None or d < best[0]: best = (d, ang)
+    c.pole_angle = math.radians(best[1])
+    c.influence = 0.0
+scene.frame_set(0)
 
 def lerp(a, b, k): return tuple(x + (y - x) * k for x, y in zip(a, b))
 def ease(k): return k * k * (3 - 2 * k)
@@ -79,7 +107,30 @@ CLIPS = {
     'Uppercut': dict(n=27, l=track([(0, TL), (8, (0.24, -0.32, 1.20)), (13, (0.22, -0.30, 1.22)), (27, TL)]),
                      r=track([(0, TR), (8, (-0.30, -0.25, 0.90)), (13, (-0.06, -0.50, 1.42)), (15, (-0.06, -0.50, 1.44)), (27, TR)]),
                      tw=track([(0, 0.0), (8, -18.0), (13, 26.0), (15, 26.0), (27, 0.0)]), drop=0),
+    # habilidades (Q): Bárbaro soca o chão, Cavaleiro investe com o ombro, Mago chama o meteoro
+    # (chibi: braço curto e cabeça enorme -> 'braços pra cima' = abertos pros lados, senão somem atrás da cabeça)
+    'Ground_Slam': dict(n=30, legs=True, pole=POLE_X, drop=0, tw=zero,
+                        l=track([(0, TL), (5, (0.60, -0.08, 1.32)), (9, (0.62, -0.05, 1.36)), (13, (0.13, -0.64, 0.32)), (18, (0.15, -0.62, 0.34)), (30, TL)]),
+                        r=track([(0, TR), (5, (-0.60, -0.08, 1.32)), (9, (-0.62, -0.05, 1.36)), (13, (-0.13, -0.64, 0.32)), (18, (-0.15, -0.62, 0.34)), (30, TR)]),
+                        lean=track([(0, 0.0), (5, -8.0), (9, -12.0), (13, 30.0), (18, 28.0), (30, 0.0)]),
+                        crouch=track([(0, 0.0), (3, 0.06), (6, 0.0), (9, 0.0), (13, 0.10), (18, 0.09), (30, 0.0)]),
+                        hip=track([(0, 0.0), (9, -4.0), (13, 18.0), (18, 16.0), (30, 0.0)]),
+                        chin=track([(0, 0.0), (9, 10.0), (13, -10.0), (30, 0.0)])),
+    'Shield_Charge': dict(n=10, legs=True, pole=POLE_X, drop=0,
+                          l=track([(0, TL), (5, (0.06, -0.60, 0.98)), (10, (0.06, -0.60, 0.98))]),
+                          r=track([(0, TR), (5, (-0.34, 0.04, 0.80)), (10, (-0.34, 0.04, 0.80))]),
+                          tw=track([(0, 0.0), (5, -20.0), (10, -20.0)]),
+                          lean=track([(0, 0.0), (5, 16.0), (10, 16.0)]),
+                          crouch=track([(0, 0.0), (5, 0.06), (10, 0.06)]),
+                          hip=track([(0, 0.0), (5, 8.0), (10, 8.0)])),
+    'Meteor_Call': dict(n=30, drop=0,
+                        l=track([(0, TL), (8, (0.30, -0.40, 0.95)), (16, (0.30, -0.36, 0.92)), (30, TL)]),
+                        r=track([(0, TR), (8, (-0.60, -0.14, 1.38)), (11, (-0.62, -0.12, 1.40)), (16, (-0.14, -0.70, 0.98)), (20, (-0.14, -0.68, 0.98)), (30, TR)]),
+                        tw=track([(0, 0.0), (8, -12.0), (16, 20.0), (30, 0.0)]),
+                        lean=track([(0, 0.0), (8, -8.0), (16, 12.0), (30, 0.0)]),
+                        chin=track([(0, 0.0), (8, 14.0), (16, -4.0), (30, 0.0)])),
 }
+val = lambda v, f: v(f) if callable(v) else v
 
 chest = arm.pose.bones['chest']
 chest.rotation_mode = 'QUATERNION'
@@ -90,6 +141,7 @@ hips, head = arm.pose.bones['hips'], arm.pose.bones['head']
 hips.rotation_mode = head.rotation_mode = 'QUATERNION'
 hinv = hips.bone.matrix_local.inverted().to_3x3()
 hxl = (head.bone.matrix_local.inverted().to_3x3() @ Vector((1, 0, 0))).normalized()
+hipx = (hinv @ Vector((1, 0, 0))).normalized()
 bones = list(arm.pose.bones)
 baked = {}
 NDC = {}
@@ -99,6 +151,7 @@ for name, c in CLIPS.items():
     set_action(idle)
     pole = c.get('pole', POLE_OUT)
     for s in ('l', 'r'): P[s].location = pole[s]
+    for s in LEG: LEG[s][2].influence = 1.0 if c.get('legs') else 0.0
     frames = []
     for f in range(c['n'] + 1):
         scene.frame_set(f % 32)
@@ -106,16 +159,19 @@ for name, c in CLIPS.items():
         chest.rotation_quaternion = Quaternion(zl, math.radians(c['tw'](f))) @ chest.rotation_quaternion
         chest.location = chest.location + cinv @ Vector((0, 0, -c['drop']))
         # postura: inclina o tronco pra frente, abaixa o quadril (joelhos dobram) e baixa o queixo
-        if c.get('lean'): chest.rotation_quaternion = Quaternion(xl, math.radians(c['lean'])) @ chest.rotation_quaternion
-        if c.get('crouch'): hips.location = hips.location + hinv @ Vector((0, 0, -c['crouch']))
-        if c.get('chin'): head.rotation_quaternion = Quaternion(hxl, math.radians(c['chin'])) @ head.rotation_quaternion
+        if c.get('lean'): chest.rotation_quaternion = Quaternion(xl, math.radians(val(c['lean'], f))) @ chest.rotation_quaternion
+        if c.get('crouch'): hips.location = hips.location + hinv @ Vector((0, 0, -val(c['crouch'], f)))
+        if c.get('hip'): hips.rotation_quaternion = Quaternion(hipx, math.radians(val(c['hip'], f))) @ hips.rotation_quaternion
+        if c.get('chin'): head.rotation_quaternion = Quaternion(hxl, math.radians(val(c['chin'], f))) @ head.rotation_quaternion
         vl.update()
         pose = {}
         for pb in bones:  # pose visual (com IK) -> espaço local do osso
             m = arm.convert_space(pose_bone=pb, matrix=pb.matrix, from_space='POSE', to_space='LOCAL')
             pose[pb.name] = m.decompose()
         frames.append(pose)
-        if os.environ.get('DEBUG_CLIP') == name and f == 8:
+        if os.environ.get('DEBUG_CLIP') == name and f == int(os.environ.get('DEBUG_FRAME', '8')):
+            for sd in ('l', 'r'):
+                DBG['leg_' + sd] = {'tornozelo': [round(v, 3) for v in arm.matrix_world @ arm.pose.bones['lowerleg.' + sd].tail], 'alvo': [round(v, 3) for v in LEG[sd][0].location], 'inf': LEG[sd][2].influence, 'is_valid': LEG[sd][2].is_valid}
             for sd in ('l', 'r'):
                 w = arm.matrix_world @ arm.pose.bones['lowerarm.' + sd].tail
                 h = arm.matrix_world @ arm.pose.bones['hand.' + sd].tail
@@ -132,6 +188,16 @@ for name, c in CLIPS.items():
 # grava: tira IK, cria uma action por clipe
 for s in ('l', 'r'):
     arm.pose.bones['lowerarm.' + s].constraints.remove(IK[s])
+    arm.pose.bones['lowerleg.' + s].constraints.remove(LEG[s][2])
+# momento do impacto dos clipes do pacote que o jogo usa: quadro em que a mão vai mais pra frente
+for n in ('Dualwield_Melee_Attack_Stab',):
+    set_action(bpy.data.actions[n])
+    best = None
+    for f in range(int(bpy.data.actions[n].frame_range[1]) + 1):
+        scene.frame_set(f); vl.update()
+        y = min((arm.matrix_world @ arm.pose.bones['hand.' + s].tail).y for s in ('l', 'r'))
+        if best is None or y < best[0]: best = (y, f)
+    DBG['impact_' + n] = [best[1], round(best[1] / 30, 3)]
 keep = set()
 for name, frames in baked.items():
     act = bpy.data.actions.new(name); keep.add(name)
@@ -161,8 +227,10 @@ if os.environ.get('RENDER'):
     cam.data.lens = 50
     for o in bpy.data.objects:  # armas/escudos ficam escondidos no jogo; no render também
         if o.parent_type == 'BONE' and o.parent_bone.startswith('handslot'): o.hide_render = True
-    for clip in os.environ['RENDER'].split(','):
-        set_action(bpy.data.actions[clip]); scene.frame_set(int(os.environ.get('RENDER_FRAME', '8')))
+    for spec in os.environ['RENDER'].split(','):
+        clip, _, fr = spec.partition(':')
+        set_action(bpy.data.actions[clip]); scene.frame_set(int(fr or os.environ.get('RENDER_FRAME', '8')))
+        clip = spec.replace(':', '_f')
         for view, loc in (('frente', (1.4, -4.6, 1.3)), ('frente2', (-1.6, -4.4, 1.3)), ('reta', (0.0, -4.8, 1.3)), ('lado', (4.8, -0.3, 1.2))):
             cam.location = loc
             d = Vector((0, 0, 0.95)) - Vector(loc)

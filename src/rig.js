@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SU from 'three/addons/utils/SkeletonUtils.js';
-import { T } from './config.js';
+import { T, SPECIALS } from './config.js';
 import { toonMat, addOutline } from './toon.js';
 import { damp, clamp } from './fighter.js';
 
@@ -26,21 +26,26 @@ const CLIP = {
   left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', air: 'Jump_Idle',
   jabL: 'Unarmed_Melee_Attack_Punch_B', jabR: 'Unarmed_Melee_Attack_Punch_A', heavy: 'Uppercut',
   kick: 'Unarmed_Melee_Attack_Kick', block: 'Block_Guard', blockHit: 'Block_Guard', hit: 'Hit_A', hitHeavy: 'Hit_B',
-  ko: 'Death_A', cheer: 'Cheer', dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',
+  ko: 'Death_A', cheer: 'Cheer',
+  // habilidades: Ground_Slam, Shield_Charge e Meteor_Call feitas no Blender (tools/fp_anims.py); a facada dupla é do pacote
+  slam: 'Ground_Slam', bash: 'Shield_Charge', stab: 'Dualwield_Melee_Attack_Stab', spell: 'Meteor_Call', dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',
 };
 const BASE = ['idle', 'guard', 'run', 'back', 'left', 'right', 'air'];               // locomoção (soma 1)
-const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR'];
+const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'slam', 'bash', 'stab', 'spell', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR'];
 const LOOPED = new Set(['block', 'cheer']);
 // 1ª pessoa: guarda e socos próprios (mãos enquadradas, socos no centro da mira)
 const FP_CLIP = { guard: 'FP_Guard', jabL: 'FP_JabL', jabR: 'FP_CrossR', block: 'FP_Block', blockHit: 'FP_Block' };
 // em 1ª pessoa só estes golpes/estados mexem nos braços; o resto fica na guarda (vista de dentro fica caótico)
-const FP_OVER = new Set(['jabL', 'jabR', 'heavy', 'block', 'blockHit', 'ko']);
+const FP_OVER = new Set(['jabL', 'jabR', 'heavy', 'block', 'blockHit', 'ko', 'bash', 'spell']);
 // segundo do clipe em que a mão/pé chega no alcance máximo (medido no .glb / no Blender)
 const IMPACT = {
   Unarmed_Melee_Attack_Punch_B: 0.33, Unarmed_Melee_Attack_Punch_A: 0.5, Unarmed_Melee_Attack_Kick: 0.37,
   Uppercut: 13 / 30, FP_JabL: 5 / 30, FP_CrossR: 6 / 30,
+  Ground_Slam: 13 / 30, Shield_Charge: 5 / 30, Meteor_Call: 16 / 30, Dualwield_Melee_Attack_Stab: 18 / 30,
 };
 // velocidade (m/s) em que cada ciclo de corrida não escorrega
+// qual animação cada habilidade usa
+const SPECIAL_ANIM = { slam: 'slam', charge: 'bash', blink: 'stab', meteor: 'spell' };
 const NATURAL = { run: 6, back: 2.4, left: 5.5, right: 5.5 };
 const UPPER = /spine|chest|arm|wrist|hand|head/;
 const HEIGHT = 1.75;
@@ -164,7 +169,9 @@ export class Rig {
     const o = this.over[key];
     let rate = 1, t0 = 0;
     const hit = IMPACT[this.clipName(key)];
-    if (a && hit !== undefined) {
+    if (a && hit !== undefined && a.def.special) {
+      rate = hit / (a.def.windup + (a.def.hitDelay || 0)); // impacto da animação = momento do golpe no jogo
+    } else if (a && hit !== undefined) {
       const w = a.def.windup + 0.02;
       rate = key === 'heavy' ? hit / (w + 0.03) : a.kind === 'lunge' ? 2.2 : 1.8;
       t0 = Math.max(0, hit - w * rate);
@@ -232,7 +239,7 @@ export class Rig {
     else if (foe?.ko) key = 'cheer';
     else if (f.stunT > 0) { key = this.hitKey; id = this.hitN; }
     else if (a) {
-      key = a.kind === 'heavy' || a.kind === 'super' ? 'heavy' : a.kind === 'sweep' ? 'kick' : a.kind === 'lunge' || a.kind === 'cast' || a.hand === 1 ? 'jabR' : 'jabL';
+      key = SPECIAL_ANIM[a.kind] || (a.kind === 'heavy' || a.kind === 'super' ? 'heavy' : a.kind === 'sweep' ? 'kick' : a.kind === 'lunge' || a.hand === 1 ? 'jabR' : 'jabL');
       id = a;
       upper = f.grounded && hs > 2.5 && a.kind === 'light' ? 1 : 0;
     } else if (f.dashT > 0) {
@@ -285,6 +292,9 @@ export class Rig {
       this.pivot.rotation.x = this.lean;
     }
 
+    // Passo Sombrio: some na fumaça até reaparecer atrás do oponente
+    this.model.visible = !(a?.kind === 'blink' && a.phase === 'windup' && a.t > 0.05);
+
     // flash ao apanhar; brilho na mão que vai bater
     const fl = f.flashT > 0 ? 0.6 : 0;
     for (const m of this.mats) m.emissive.setRGB(fl, fl, fl);
@@ -292,7 +302,8 @@ export class Rig {
     const tk = a ? a.kind : tell?.kind;
     const hand = a ? a.hand : tk === 'light' ? f.hand ^ 1 : 1;
     const charging = !!tell || (a && a.phase === 'windup' && a.kind !== 'sweep');
-    this.glowMat.color.set(tk === 'super' ? 0xb06bff : tk === 'heavy' ? 0xff4b3e : tk === 'cast' ? 0x7fd8ff : 0xffd23f);
+    const theme = SPECIALS[this.name]?.color ?? 0xb06bff; // habilidade e super brilham na cor do lutador
+    this.glowMat.color.set(tk === 'super' || a?.def.special ? theme : tk === 'heavy' ? 0xff4b3e : 0xffd23f);
     this.glowMat.opacity = damp(this.glowMat.opacity, charging ? 0.5 + 0.25 * Math.sin(performance.now() * 0.04) : 0, 30, dt);
     this.glows.forEach((g, i) => (g.visible = this.glowMat.opacity > 0.02 && i === hand));
   }
