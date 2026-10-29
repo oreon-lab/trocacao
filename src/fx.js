@@ -64,6 +64,18 @@ export class FX {
     }, () => mat.dispose());
   }
 
+  // onda de choque: anel virado pra câmera que cresce e some
+  ring(p, color, size = 2) {
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide });
+    const m = new THREE.Mesh(this.ringGeo ||= new THREE.RingGeometry(0.8, 1, 40), mat);
+    m.position.copy(p);
+    this.add(m, 0.35, (dt, k) => {
+      m.quaternion.copy(this.camera.quaternion);
+      m.scale.setScalar(0.2 + size * Math.sqrt(k));
+      mat.opacity = 0.9 * (1 - k);
+    }, () => mat.dispose());
+  }
+
   ghost(f, color) {
     const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false });
     const m = new THREE.Mesh(this.capsule, mat);

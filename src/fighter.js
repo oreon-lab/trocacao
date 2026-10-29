@@ -13,7 +13,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _hit = new THREE.Vecto
 // Input abstrato: o jogador (teclado/mouse) e o bot preenchem a mesma coisa.
 // mx = direita, mz = frente. jump/dash/light/heavy são "apertou neste frame" e são consumidos.
 export function emptyInput() {
-  return { mx: 0, mz: 0, yaw: 0, pitch: 0, jump: false, jumpHeld: false, dash: false, dashX: 0, dashZ: 0, crouch: false, light: false, heavy: false, block: false };
+  return { mx: 0, mz: 0, yaw: 0, pitch: 0, jump: false, jumpHeld: false, dash: false, dashX: 0, dashZ: 0, crouch: false, light: false, heavy: false, block: false, dodge: false, q: false, r: false };
 }
 
 // Distância mínima entre os segmentos p1q1 e p2q2; escreve em `out` o ponto mais próximo do primeiro.
@@ -56,11 +56,26 @@ export class Fighter {
       hp: T.hp, stunT: 0, blocking: false, blockT: 0,
       atk: null, queued: null, queueT: 0, hand: 1, flashT: 0, ko: false, // hand 1 -> 1º soco rápido = jab (esquerda)
       walkPhase: 0, landImpact: 0, comboN: 0, comboT: 0, tell: null,
+      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0,
     });
   }
 
   get eyeY() { return this.pos.y + this.height * T.eyeRatio; }
-  get invuln() { return this.dashT > 0 && T.dashTime - this.dashT < T.dashIFrames; }
+  get invuln() { return this.invulnT > 0 || (this.dashT > 0 && T.dashTime - this.dashT < T.dashIFrames); }
+  gain(n) { this.meter = clamp(this.meter + n, 0, T.meterMax); }
+
+  // o golpe do oponente (ou um projétil) vai chegar em instantes? = janela da esquiva perfeita
+  perfectWindow(foe) {
+    if (this.incoming > 0) return true; // projétil quase batendo (o main marca)
+    if (!foe || foe.ko) return false;
+    const a = foe.atk;
+    if (a && !a.hit && !a.def.ranged) {
+      const left = a.phase === 'windup' ? a.def.windup - a.t : a.phase === 'active' ? 0 : 9;
+      if (left <= T.perfectWindow && foe.reach(this, a.def) < 0.9) return true;
+    }
+    const tl = foe.tell; // bot armando o golpe
+    return !!(tl && !tl.pressed && tl.dur - tl.el < 0.08 && Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 3);
+  }
   forward(out) { return out.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)); }
   lookDir(out) {
     const cp = Math.cos(this.pitch);
@@ -70,11 +85,13 @@ export class Fighter {
   update(dt, foe, arena) {
     const I = this.input;
     const canAct = this.stunT <= 0 && !this.ko;
-    this.yaw = I.yaw;
-    this.pitch = I.pitch;
+    if (!this.ko) { this.yaw = I.yaw; this.pitch = I.pitch; } // caído não gira
 
     // timers
     this.stunT = Math.max(0, this.stunT - dt);
+    this.invulnT = Math.max(0, this.invulnT - dt);
+    this.counterT = Math.max(0, this.counterT - dt);
+    this.incoming = Math.max(0, this.incoming - dt);
     this.flashT = Math.max(0, this.flashT - dt);
     this.dashCd -= dt;
     this.sinceDash += dt;
@@ -123,6 +140,24 @@ export class Fighter {
     this.crouching = I.crouch && !this.sliding;
     const hTarget = this.sliding ? T.slideHeight : this.crouching ? T.crouchHeight : T.standHeight;
     this.height = damp(this.height, hTarget, 18, dt);
+
+    // esquiva (E): desvio rápido pro lado (ou pra onde o WASD aponta). Na hora certa = ESQUIVA PERFEITA:
+    // não gasta carga, fica invencível mais tempo, dá contra-ataque e energia.
+    if (I.dodge && canAct && this.dashCd <= 0) {
+      const perfect = this.perfectWindow(foe);
+      if (perfect || this.charges > 0) {
+        I.dash = true;
+        I.dashX = I.mx || (this.dodgeSide = -this.dodgeSide);
+        I.dashZ = I.mz ? I.mz * 0.5 : -0.35;
+        if (perfect) {
+          this.charges++;
+          this.invulnT = T.perfectIFrames;
+          this.counterT = T.counterTime;
+          this.gain(25);
+          events.push({ type: 'perfect', f: this });
+        }
+      }
+    }
 
     // dash: direção do WASD (ou do toque duplo); sem direção = pra frente
     if (I.dash && canAct && this.charges > 0 && this.dashCd <= 0 && (this.grounded || this.airDashes < 1)) {
@@ -204,6 +239,12 @@ export class Fighter {
     // golpes
     // clique durante o atordoamento fica guardado e sai assim que der (não some mais)
     if (!this.ko && (I.light || I.heavy)) { this.queued = I.heavy ? 'heavy' : 'light'; this.queueT = 0.25; }
+    // poderes: R = super soco (barra cheia), Q = bola de energia
+    if (canAct && !this.atk && !this.blocking && (I.q || I.r)) {
+      if (I.r && this.meter >= T.costR) { this.meter -= T.costR; this.startAttack('super', foe); events.push({ type: 'superStart', f: this }); }
+      else if (I.q && this.meter >= T.costQ) { this.meter -= T.costQ; this.startAttack('cast', foe); }
+      else events.push({ type: 'noMeter', f: this });
+    }
     if (this.queued && !this.atk && canAct && !this.blocking) this.startAttack(this.queued, foe);
     if (this.atk) {
       const a = this.atk, d = a.def;
@@ -212,6 +253,14 @@ export class Fighter {
         a.phase = 'active';
         a.t -= d.windup;
         events.push({ type: 'swing', f: this, kind: a.kind });
+        if (d.ranged) { a.hit = true; events.push({ type: 'fire', f: this }); } // solta a bola de energia
+        if (a.kind === 'super') { // avança voando até o oponente
+          const dd = foe ? this.inCone(foe, 7, 0.6) : 0, f = this.forward(_d);
+          const v = dd ? Math.min(16, (dd - 1) * 7) : 10;
+          if (dd) f.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize();
+          this.vel.x = f.x * v;
+          this.vel.z = f.z * v;
+        }
       }
       if (a.phase === 'active') {
         if (!a.hit) this.tryHit(foe);
@@ -221,7 +270,7 @@ export class Fighter {
       if (this.atk && a.phase === 'recovery' && a.t >= d.recovery * (a.hit ? 0.6 : 1)) this.atk = null;
     }
 
-    I.jump = I.dash = I.light = I.heavy = false;
+    I.jump = I.dash = I.light = I.heavy = I.dodge = I.q = I.r = false;
     I.dashX = I.dashZ = 0;
   }
 
@@ -235,12 +284,12 @@ export class Fighter {
   startAttack(kind, foe) {
     this.queued = null;
     let k = kind;
-    if (this.sliding) k = 'sweep';
+    if (this.sliding && (kind === 'light' || kind === 'heavy')) k = 'sweep';
     else if (kind === 'light' && (this.dashT > 0 || this.sinceDash < 0.18)) k = 'lunge';
     const def = ATTACKS[k];
     this.atk = { id: (this.atkN = (this.atkN || 0) + 1), kind: k, def, t: 0, phase: 'windup', hit: false, hand: k === 'light' ? (this.hand ^= 1) : 1 };
     // passo à frente: o soco "anda" até o oponente se ele tá quase no alcance
-    const d = foe && k !== 'sweep' ? this.inCone(foe, 4.5, 0.75) : 0;
+    const d = foe && k !== 'sweep' && k !== 'cast' && k !== 'super' ? this.inCone(foe, 4.5, 0.75) : 0;
     if (d > 1.1) {
       const v = Math.min(k === 'lunge' ? 9 : k === 'heavy' ? 5 : 3.5, (d - 1.0) * 6);
       this.vel.x += (foe.pos.x - this.pos.x) / d * v;
@@ -283,13 +332,18 @@ export class Fighter {
 
   tryHit(foe) {
     if (foe.ko || foe.invuln) return;
-    const def = this.atk.def;
+    let def = this.atk.def;
     if (this.reach(foe, def) > 0) return;
     this.atk.hit = true;
+    const kind = this.atk.kind, point = _hit.clone();
+    // contra-ataque depois de uma esquiva perfeita: golpe mais forte
+    const mul = this.counterT > 0 ? T.counterMul : 1;
+    if (mul > 1) { def = { ...def, dmg: def.dmg * mul, knock: def.knock * 1.3 }; this.counterT = 0; }
     // online: quem apanha decide o resultado (defesa/parry/acerto) na máquina dele
-    if (foe.remote) return foe.onRemoteHit(this.atk.kind, _hit.clone());
+    if (foe.remote) return foe.onRemoteHit(kind, point, mul);
     const result = foe.receive(this, def);
-    events.push({ type: result, f: this, victim: foe, kind: this.atk?.kind ?? 'light', point: _hit.clone(), dmg: def.dmg, combo: foe.comboN });
+    this.gain(result === 'hit' ? 7 : result === 'break' ? 6 : result === 'block' ? 2 : 0);
+    events.push({ type: result, f: this, victim: foe, kind, point, dmg: Math.round(def.dmg), combo: foe.comboN, counter: mul > 1 });
   }
 
   receive(att, def) {
@@ -310,6 +364,7 @@ export class Fighter {
         att.atk = null;
         att.vel.x = -nx * 8;
         att.vel.z = -nz * 8;
+        this.gain(20);
         return 'parry';
       }
       if (def.guardBreak) {
@@ -318,11 +373,13 @@ export class Fighter {
         this.hp -= def.dmg * 0.35;
         knock(0.7);
         this.flashT = 0.1;
+        this.gain(3);
         this.checkKO();
         return 'break';
       }
       this.hp -= def.dmg * 0.1;
       knock(0.6);
+      this.gain(3);
       this.checkKO();
       return 'block';
     }
@@ -340,6 +397,7 @@ export class Fighter {
     this.flashT = 0.12;
     knock(fin ? 1.8 : 1, fin ? Math.max(def.up, 4) : def.up);
     if (fin) this.comboT = 0;
+    this.gain(4);
     this.checkKO();
     return 'hit';
   }

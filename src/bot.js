@@ -69,7 +69,7 @@ export class Bot {
       if (r === 'block') this.blockT = rand(0.3, 0.6);
       if (r === 'lowblock') { this.blockT = this.crouchT = 0.5; }
       if (r === 'jump') { I.jump = true; this.jumpT = 0.3; }
-      if (r === 'dodge') { I.dash = true; I.dashX = Math.random() < 0.5 ? -1 : 1; I.dashZ = Math.random() < 0.4 ? -1 : 0; }
+      if (r === 'dodge') { I.dodge = true; I.mx = Math.random() < 0.5 ? -1 : 1; } // esquiva no E (perfeita se acertar o tempo)
     }
     if (this.blockT > 0) { this.blockT -= dt; I.block = true; }
     if (this.crouchT > 0) { this.crouchT -= dt; I.crouch = true; }
@@ -122,5 +122,15 @@ export class Bot {
       this.atkCd = rand(0.15, 0.55) / L.aggro;
     }
     me.tell = this.tell;
+
+    // poderes: super quando a barra enche e o jogador tá perto; bola de energia de média distância
+    if (!me.atk && facing && me.stunT <= 0) {
+      if (me.meter >= T.costR && dist < 5 && Math.random() < dt * 1.5 * L.aggro) I.r = true;
+      else if (me.meter >= T.costQ && dist > 5 && dist < 14 && Math.random() < dt * 0.5 * L.aggro) I.q = true;
+    }
+    // bola de energia vindo: defende ou esquiva
+    if (me.incoming > 0 && this.blockT <= 0 && Math.random() < L.react * dt * 8) {
+      if (Math.random() < 0.5) this.blockT = 0.4; else I.dodge = true;
+    }
   }
 }

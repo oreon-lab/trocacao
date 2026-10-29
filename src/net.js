@@ -24,7 +24,7 @@ export function snapshot(f, extra) {
     p: [r2(f.pos.x), r2(f.pos.y), r2(f.pos.z)], v: [r2(f.vel.x), r2(f.vel.y), r2(f.vel.z)],
     y: r2(f.yaw), pi: r2(f.pitch), h: r2(f.height), wp: r2(f.walkPhase),
     b: (f.grounded ? 1 : 0) | (f.blocking ? 2 : 0) | (f.sliding ? 4 : 0) | (f.crouching ? 8 : 0) | (f.ko ? 16 : 0),
-    d: r2(f.dashT), dl: [r2(f.dashLocal.x), r2(f.dashLocal.z)], st: r2(f.stunT), fl: r2(f.flashT), hp: r2(f.hp), hd: f.hand,
+    d: r2(f.dashT), dl: [r2(f.dashLocal.x), r2(f.dashLocal.z)], st: r2(f.stunT), fl: r2(f.flashT), hp: r2(f.hp), hd: f.hand, m: Math.round(f.meter), iv: r2(f.invulnT),
     a: a ? { id: a.id, k: a.kind, ph: a.phase, t: r2(a.t), hd: a.hand } : null,
   };
 }
@@ -61,7 +61,7 @@ export class Remote {
     // estado discreto vem do pacote mais novo já "alcançado"
     const S = k > 0.5 ? B : A;
     f.grounded = !!(S.b & 1); f.blocking = !!(S.b & 2); f.sliding = !!(S.b & 4); f.crouching = !!(S.b & 8); f.ko = !!(S.b & 16);
-    f.dashT = S.d; f.dashLocal = { x: S.dl[0], z: S.dl[1] }; f.stunT = S.st; f.flashT = S.fl; f.hp = S.hp; f.hand = S.hd;
+    f.dashT = S.d; f.dashLocal = { x: S.dl[0], z: S.dl[1] }; f.stunT = S.st; f.flashT = S.fl; f.hp = S.hp; f.hand = S.hd; f.meter = S.m || 0; f.invulnT = S.iv || 0;
     if (S.a) {
       if (!f.atk || f.atk.id !== S.a.id) f.atk = { id: S.a.id, kind: S.a.k, def: ATTACKS[S.a.k], hand: S.a.hd, hit: false };
       f.atk.phase = S.a.ph;

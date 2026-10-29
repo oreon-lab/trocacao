@@ -2,7 +2,8 @@ import { T } from './config.js';
 import { clamp } from './fighter.js';
 
 const TAP = { KeyW: [0, 1], KeyS: [0, -1], KeyA: [-1, 0], KeyD: [1, 0] };
-const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'KeyC', 'KeyF', 'KeyE', 'KeyV', 'Tab']);
+const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'KeyC', 'KeyF', 'KeyE', 'KeyQ', 'KeyR', 'KeyV', 'Tab']);
+const EDGE = { Space: 'jump', KeyE: 'dodge', KeyQ: 'q', KeyR: 'r' }; // teclas de "apertou agora"
 
 // Teclado + mouse -> input abstrato do Fighter.
 export class PlayerInput {
@@ -15,7 +16,7 @@ export class PlayerInput {
     this.doubleTap = true;
     this.dx = 0; // delta do mouse no frame (balanço dos punhos)
     this.dy = 0;
-    this.p = { jump: false, dash: false, dashX: 0, dashZ: 0, light: false, heavy: false };
+    this.p = { jump: false, dash: false, dashX: 0, dashZ: 0, light: false, heavy: false, dodge: false, q: false, r: false };
     this.lastTap = { code: '', t: 0 };
     this.onToggleView = null;
 
@@ -25,7 +26,7 @@ export class PlayerInput {
       if (e.code === 'Escape' || e.code === 'KeyP') return document.exitPointerLock();
       if (e.repeat) return;
       this.keys.add(e.code);
-      if (e.code === 'Space') this.p.jump = true;
+      if (EDGE[e.code]) this.p[EDGE[e.code]] = true;
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.p.dash = true;
       if (e.code === 'KeyV') this.onToggleView?.();
       const tap = TAP[e.code];
@@ -69,13 +70,16 @@ export class PlayerInput {
       I.mz = (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
       I.jumpHeld = k.has('Space');
       I.crouch = k.has('ControlLeft') || k.has('ControlRight') || k.has('KeyC');
-      I.block = k.has('KeyF') || k.has('KeyE');
+      I.block = k.has('KeyF');
       if (p.jump) I.jump = true;
+      if (p.dodge) I.dodge = true;
+      if (p.q) I.q = true;
+      if (p.r) I.r = true;
       if (p.light) I.light = true;
       if (p.heavy) I.heavy = true;
       if (p.dash) { I.dash = true; I.dashX = p.dashX; I.dashZ = p.dashZ; }
     }
-    p.jump = p.dash = p.light = p.heavy = false;
+    p.jump = p.dash = p.light = p.heavy = p.dodge = p.q = p.r = false;
     p.dashX = p.dashZ = 0;
   }
 }

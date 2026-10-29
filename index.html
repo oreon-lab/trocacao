@@ -32,12 +32,30 @@
   .wins i.on { background: var(--y); }
   #timer { min-width: 86px; text-align: center; font-size: 54px; line-height: 1; padding: 4px 10px; background: var(--y); color: var(--ink); border: 4px solid var(--ink); border-radius: 10px; box-shadow: 4px 4px 0 var(--ink); }
 
-  #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); }
-  #cross::before, #cross::after { content: ''; position: absolute; background: #fff; border: 2px solid var(--ink); border-radius: 3px; }
-  #cross::before { left: 8px; top: 0; width: 6px; height: 22px; }
-  #cross::after { top: 8px; left: 0; width: 22px; height: 6px; }
-  #cross.hot::before, #cross.hot::after { background: var(--y); }
-  #cross.hot { transform: translate(-50%, -50%) rotate(45deg); transition: transform .08s; }
+  /* mira: bolinha simples; fica amarela e cresce quando o soco alcança */
+  #cross { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px var(--ink); transform: translate(-50%, -50%); transition: transform .08s, background .08s; }
+  #cross.hot { background: var(--y); transform: translate(-50%, -50%) scale(1.5); }
+  /* energia + poderes */
+  .meter { margin-top: 5px; height: 10px; background: #3a3246; border: 3px solid var(--ink); border-radius: 5px; overflow: hidden; transform: skewX(-12deg); position: relative; }
+  .side.right .meter { transform: skewX(12deg); }
+  .meter i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: linear-gradient(90deg, #7fd8ff, #b06bff); }
+  .side.right .meter i { left: auto; right: 0; }
+  .meter.full i { background: linear-gradient(90deg, #ffd23f, #ff6bd6); animation: glowbar .5s infinite alternate; }
+  @keyframes glowbar { to { filter: brightness(1.4); } }
+  #skills { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 12px; }
+  #skills div { width: 74px; padding: 4px 0 3px; text-align: center; background: #3a3246cc; border: 4px solid var(--ink); border-radius: 12px; box-shadow: 3px 3px 0 var(--ink); opacity: .55; transition: opacity .15s, transform .15s; }
+  #skills div.ready { opacity: 1; background: #b06bffdd; transform: translateY(-3px); }
+  #skills div.deny { animation: deny .3s; }
+  @keyframes deny { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+  #skills b { display: block; font-size: 26px; line-height: 1; -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; }
+  #skills span { font-family: system-ui, sans-serif; font-size: 11px; font-weight: 800; }
+  /* aviso da esquiva: aparece quando o golpe vem; verde = AGORA (esquiva perfeita) */
+  #dodgeKey { position: absolute; left: calc(50% + 70px); top: 50%; width: 52px; height: 52px; margin-top: -26px; display: grid; place-items: center; font-size: 34px; color: var(--ink); background: #fff; border: 4px solid var(--ink); border-radius: 12px; box-shadow: 4px 4px 0 var(--ink); opacity: 0; transform: scale(.8); transition: opacity .06s, transform .06s, background .06s; }
+  #dodgeKey.show { opacity: 1; transform: scale(1); }
+  #dodgeKey.now { background: #5dff7a; transform: scale(1.25); }
+  #slow { position: absolute; inset: 0; opacity: 0; transition: opacity .15s; background: radial-gradient(circle, transparent 40%, rgba(80,160,255,.45) 100%); }
+  body.slowmo #game { filter: saturate(.55) contrast(1.15); }
+  body.slowmo #slow { opacity: 1; }
 
   /* aviso de ataque: anel fecha até a mira = golpe chegando (defender bem no fim = parry) */
   #warnRing { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; border: 6px solid #ffd23f; border-radius: 50%; opacity: 0; box-shadow: 0 0 0 3px var(--ink), inset 0 0 0 3px var(--ink); }
@@ -110,19 +128,24 @@
     <div class="side left">
       <div class="name stroke" id="pName">VOCÊ</div>
       <div class="bar"><div class="trail" id="pTrail"></div><div class="fill" id="pFill"></div></div>
+      <div class="meter" id="pMeterBox"><i id="pMeter"></i></div>
       <div class="wins" id="pWins"><i></i><i></i></div>
     </div>
     <div id="timer">99</div>
     <div class="side right">
       <div class="name stroke" id="eName">BOT</div>
       <div class="bar"><div class="trail" id="eTrail"></div><div class="fill" id="eFill"></div></div>
+      <div class="meter" id="eMeterBox"><i id="eMeter"></i></div>
       <div class="wins" id="eWins"><i></i><i></i></div>
     </div>
   </div>
   <div id="warnRing"></div>
   <div id="warnText"></div>
   <div id="mark"><span>!</span><b>➤</b></div>
+  <div id="slow"></div>
   <div id="cross"></div>
+  <div id="dodgeKey">E</div>
+  <div id="skills"><div id="skQ"><b>Q</b><span>ENERGIA 35</span></div><div id="skR"><b>R</b><span>SUPER 100</span></div></div>
   <div id="dashes"></div>
   <div id="banner"></div>
   <div id="pops"></div>
@@ -159,7 +182,10 @@
         <tr><td><kbd>Ctrl</kbd> / <kbd>C</kbd></td><td>Agachar · correndo/dash + agachar = slide</td></tr>
         <tr><td>Botão esq.</td><td>Soco rápido (alterna as mãos)</td></tr>
         <tr><td>Botão dir.</td><td>Soco pesado (quebra defesa)</td></tr>
-        <tr><td><kbd>F</kbd> / <kbd>E</kbd></td><td>Defender · apertar na hora = PARRY</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Defender · apertar na hora = PARRY</td></tr>
+        <tr><td><kbd>E</kbd></td><td>Esquivar · quando o E aparece verde = ESQUIVA PERFEITA (câmera lenta + contra-ataque)</td></tr>
+        <tr><td><kbd>Q</kbd></td><td>Bola de energia (35 de energia)</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Super soco (barra cheia)</td></tr>
         <tr><td>Dash + esq.</td><td>Investida</td></tr>
         <tr><td>Slide + soco</td><td>Rasteira (lança; só defende agachado)</td></tr>
         <tr><td><kbd>V</kbd></td><td>1ª / 3ª pessoa</td></tr>

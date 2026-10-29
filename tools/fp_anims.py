@@ -61,9 +61,10 @@ D = 0.09
 GL, GR = (0.28, -0.50, 1.10), (-0.28, -0.46, 1.07)          # guarda 1ª pessoa
 BL, BR = (0.097, -0.50, 1.15), (-0.143, -0.48, 1.14)          # defesa 1ª pessoa: luvas na frente do rosto
 TL, TR = (0.25, -0.30, 1.22), (-0.25, -0.28, 1.20)          # guarda 3ª pessoa (pro uppercut voltar)
-KL, KR = (0.085, -0.42, 1.24), (-0.085, -0.41, 1.23)        # defesa 3ª pessoa: antebraços em pé cobrindo o rosto
+KL, KR = (0.38, -0.32, 1.40), (-0.43, -0.31, 1.39)          # defesa 3ª pessoa: luvas nas bochechas, dos lados da cabeça (a cabeça é grande demais pra cobrir na frente)
 POLE_OUT = {'l': (0.35, 0.3, 0.55), 'r': (-0.35, 0.3, 0.55)}
-POLE_IN = {'l': (0.15, -0.05, 0.6), 'r': (-0.15, -0.05, 0.6)}  # cotovelos fechados (defesa)
+POLE_IN = {'l': (0.15, -0.05, 0.6), 'r': (-0.15, -0.05, 0.6)}  # cotovelos fechados (defesa 1ª pessoa)
+POLE_X = {'l': (0.6, -0.25, 0.95), 'r': (-0.6, -0.25, 0.95)}  # cotovelos abertos (guarda em X)
 bob = lambda p, a=0.012: track([(0, p), (16, (p[0], p[1], p[2] + a)), (32, p)])
 zero = track([(0, 0.0), (32, 0.0)])
 CLIPS = {
@@ -74,7 +75,7 @@ CLIPS = {
                       r=track([(0, GR), (2, (-0.27, -0.42, 1.05)), (6, (-0.03, -0.72, 1.47)), (8, (-0.03, -0.72, 1.47)), (17, GR)]),
                       tw=track([(0, 0.0), (6, 22.0), (17, 0.0)]), drop=D),
     'FP_Block': dict(n=32, l=bob(BL, 0.008), r=bob(BR, 0.008), tw=zero, drop=D, pole=POLE_IN),
-    'Block_Guard': dict(n=32, l=bob(KL, 0.008), r=bob(KR, 0.008), tw=zero, drop=0, pole=POLE_IN),
+    'Block_Guard': dict(n=32, l=bob(KL, 0.008), r=bob(KR, 0.008), tw=zero, drop=0, pole=POLE_IN, lean=14, crouch=0.08, chin=-8),
     'Uppercut': dict(n=27, l=track([(0, TL), (8, (0.24, -0.32, 1.20)), (13, (0.22, -0.30, 1.22)), (27, TL)]),
                      r=track([(0, TR), (8, (-0.30, -0.25, 0.90)), (13, (-0.06, -0.50, 1.42)), (15, (-0.06, -0.50, 1.44)), (27, TR)]),
                      tw=track([(0, 0.0), (8, -18.0), (13, 26.0), (15, 26.0), (27, 0.0)]), drop=0),
@@ -84,9 +85,15 @@ chest = arm.pose.bones['chest']
 chest.rotation_mode = 'QUATERNION'
 cinv = chest.bone.matrix_local.inverted().to_3x3()
 zl = (cinv @ Vector((0, 0, 1))).normalized()  # Z do mundo no espaço do osso
+xl = (cinv @ Vector((1, 0, 0))).normalized()  # X do mundo (inclinar o tronco pra frente)
+hips, head = arm.pose.bones['hips'], arm.pose.bones['head']
+hips.rotation_mode = head.rotation_mode = 'QUATERNION'
+hinv = hips.bone.matrix_local.inverted().to_3x3()
+hxl = (head.bone.matrix_local.inverted().to_3x3() @ Vector((1, 0, 0))).normalized()
 bones = list(arm.pose.bones)
 baked = {}
 NDC = {}
+DBG = {}
 EYE = Vector((0, 0, arm.data.bones['head'].head_local.z + 0.15))
 for name, c in CLIPS.items():
     set_action(idle)
@@ -98,12 +105,22 @@ for name, c in CLIPS.items():
         T['l'].location, T['r'].location = c['l'](f), c['r'](f)
         chest.rotation_quaternion = Quaternion(zl, math.radians(c['tw'](f))) @ chest.rotation_quaternion
         chest.location = chest.location + cinv @ Vector((0, 0, -c['drop']))
+        # postura: inclina o tronco pra frente, abaixa o quadril (joelhos dobram) e baixa o queixo
+        if c.get('lean'): chest.rotation_quaternion = Quaternion(xl, math.radians(c['lean'])) @ chest.rotation_quaternion
+        if c.get('crouch'): hips.location = hips.location + hinv @ Vector((0, 0, -c['crouch']))
+        if c.get('chin'): head.rotation_quaternion = Quaternion(hxl, math.radians(c['chin'])) @ head.rotation_quaternion
         vl.update()
         pose = {}
         for pb in bones:  # pose visual (com IK) -> espaço local do osso
             m = arm.convert_space(pose_bone=pb, matrix=pb.matrix, from_space='POSE', to_space='LOCAL')
             pose[pb.name] = m.decompose()
         frames.append(pose)
+        if os.environ.get('DEBUG_CLIP') == name and f == 8:
+            for sd in ('l', 'r'):
+                w = arm.matrix_world @ arm.pose.bones['lowerarm.' + sd].tail
+                h = arm.matrix_world @ arm.pose.bones['hand.' + sd].tail
+                e = arm.matrix_world @ arm.pose.bones['lowerarm.' + sd].head
+                DBG['bake_' + sd] = {'pulso': [round(v, 3) for v in w], 'alvo': [round(v, 3) for v in T[sd].location], 'punho': [round(v, 3) for v in h], 'cotovelo': [round(v, 3) for v in e]}
         if name.startswith('FP') and f in (0, 5, 6):  # onde o punho cai na tela (câmera nos olhos, FOV 80, 16:9)
             for s in ('l', 'r'):
                 h = arm.matrix_world @ arm.pose.bones['hand.' + s].tail
@@ -130,6 +147,30 @@ for name, frames in baked.items():
 # cópia da Unarmed_Idle reexportada: serve pra conferir no three.js que o rig bate com o original
 test = idle.copy(); test.name = 'RoundTrip_Idle'; keep.add(test.name); test.use_fake_user = True
 
+# RENDER=Clip,Clip2 -> renderiza essas poses de frente e de lado (pra conferir) em RENDER_DIR
+if os.environ.get('RENDER'):
+    out_dir = os.environ.get('RENDER_DIR', ROOT)
+    scene.render.engine = 'BLENDER_WORKBENCH'
+    scene.display.shading.color_type = 'TEXTURE'
+    scene.display.shading.light = 'STUDIO'
+    scene.display.shading.show_object_outline = True
+    scene.render.resolution_x, scene.render.resolution_y = 520, 620
+    scene.world = scene.world or bpy.data.worlds.new('w')
+    scene.world.color = (0.85, 0.92, 1.0)
+    cam = bpy.data.objects.new('cam', bpy.data.cameras.new('cam')); scene.collection.objects.link(cam); scene.camera = cam
+    cam.data.lens = 50
+    for o in bpy.data.objects:  # armas/escudos ficam escondidos no jogo; no render também
+        if o.parent_type == 'BONE' and o.parent_bone.startswith('handslot'): o.hide_render = True
+    for clip in os.environ['RENDER'].split(','):
+        set_action(bpy.data.actions[clip]); scene.frame_set(int(os.environ.get('RENDER_FRAME', '8')))
+        for view, loc in (('frente', (1.4, -4.6, 1.3)), ('frente2', (-1.6, -4.4, 1.3)), ('reta', (0.0, -4.8, 1.3)), ('lado', (4.8, -0.3, 1.2))):
+            cam.location = loc
+            d = Vector((0, 0, 0.95)) - Vector(loc)
+            cam.rotation_euler = d.to_track_quat('-Z', 'Y').to_euler()
+            scene.render.filepath = os.path.join(out_dir, f'{clip}_{view}.png')
+            bpy.ops.render.render(write_still=True)
+        DBG['render_' + clip] = [round(v, 3) for v in (arm.matrix_world @ arm.pose.bones['lowerarm.l'].tail)]
+
 for a in list(bpy.data.actions):
     if a.name not in keep: bpy.data.actions.remove(a)
 for o in list(bpy.data.objects):
@@ -139,4 +180,4 @@ bpy.ops.object.select_all(action='DESELECT'); arm.select_set(True); vl.objects.a
 out = os.path.join(ROOT, 'assets', 'kaykit', 'extra_anims.glb')
 bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', use_selection=True, export_animations=True,
                           export_animation_mode='ACTIONS', export_force_sampling=True, export_skins=False)
-print('JSON>' + json.dumps({'out': out, 'size': os.path.getsize(out), 'clips': sorted(keep), 'ndc': NDC}))
+print('JSON>' + json.dumps({'out': out, 'size': os.path.getsize(out), 'clips': sorted(keep), 'ndc': NDC, 'dbg': DBG}))

@@ -12,6 +12,14 @@ node server.js
 
 Abra http://localhost:5173. O mesmo servidor entrega o jogo e faz o multiplayer (`PORT=8080 node server.js` muda a porta).
 
+## Mecânicas
+
+- **E** — esquiva. Quando um golpe vem, aparece um "E" na tela; se apertar quando ele fica **verde**, é ESQUIVA PERFEITA: câmera lenta, invencível, e o próximo golpe é um contra-ataque (x1.5).
+- **F** — defesa (apertar bem na hora do golpe = parry; parry numa bola de energia rebate ela).
+- **Energia** (barra embaixo da vida): enche batendo, apanhando, defendendo, com parry e esquiva perfeita.
+- **Q** — bola de energia (35). **R** — super soco voador (barra cheia, quebra defesa).
+- **F11** / **Alt+Enter** — tela cheia.
+
 ## Online 1v1
 
 1. Um jogador clica em **ONLINE 1v1** com o código vazio: cria uma sala e mostra o código.

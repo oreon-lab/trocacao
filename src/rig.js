@@ -232,7 +232,7 @@ export class Rig {
     else if (foe?.ko) key = 'cheer';
     else if (f.stunT > 0) { key = this.hitKey; id = this.hitN; }
     else if (a) {
-      key = a.kind === 'heavy' ? 'heavy' : a.kind === 'sweep' ? 'kick' : a.kind === 'lunge' || a.hand === 1 ? 'jabR' : 'jabL';
+      key = a.kind === 'heavy' || a.kind === 'super' ? 'heavy' : a.kind === 'sweep' ? 'kick' : a.kind === 'lunge' || a.kind === 'cast' || a.hand === 1 ? 'jabR' : 'jabL';
       id = a;
       upper = f.grounded && hs > 2.5 && a.kind === 'light' ? 1 : 0;
     } else if (f.dashT > 0) {
@@ -292,7 +292,7 @@ export class Rig {
     const tk = a ? a.kind : tell?.kind;
     const hand = a ? a.hand : tk === 'light' ? f.hand ^ 1 : 1;
     const charging = !!tell || (a && a.phase === 'windup' && a.kind !== 'sweep');
-    this.glowMat.color.set(tk === 'heavy' ? 0xff4b3e : 0xffd23f);
+    this.glowMat.color.set(tk === 'super' ? 0xb06bff : tk === 'heavy' ? 0xff4b3e : tk === 'cast' ? 0x7fd8ff : 0xffd23f);
     this.glowMat.opacity = damp(this.glowMat.opacity, charging ? 0.5 + 0.25 * Math.sin(performance.now() * 0.04) : 0, 30, dt);
     this.glows.forEach((g, i) => (g.visible = this.glowMat.opacity > 0.02 && i === hand));
   }
