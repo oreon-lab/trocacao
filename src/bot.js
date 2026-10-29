@@ -4,9 +4,10 @@ import { clamp, damp } from './fighter.js';
 // turn = velocidade de giro (rad/s): dá pra "sair da mira" do bot com dash
 // tell = quanto tempo o bot "arma" o golpe antes de soltar (aviso no HUD)
 const LEVELS = {
-  easy: { turn: 4, react: 0.25, delay: [0.25, 0.45], aggro: 0.55, block: 0.5, dodge: 0.3, lunge: 0.2, tell: 0.4 },
-  normal: { turn: 7, react: 0.5, delay: [0.15, 0.3], aggro: 0.85, block: 0.55, dodge: 0.4, lunge: 0.35, tell: 0.28 },
-  hard: { turn: 12, react: 0.85, delay: [0.08, 0.2], aggro: 1.15, block: 0.55, dodge: 0.45, lunge: 0.5, tell: 0.18 },
+  easy: { grab: 0, turn: 4, react: 0.25, delay: [0.25, 0.45], aggro: 0.55, block: 0.5, dodge: 0.3, lunge: 0.2, tell: 0.4 },
+  normal: { grab: 0.08, turn: 7, react: 0.5, delay: [0.15, 0.3], aggro: 0.85, block: 0.55, dodge: 0.4, lunge: 0.35, tell: 0.28 },
+  // difícil = tryhard: esquiva perfeita, persegue arremessos, dash pros lados, pulo duplo, soco voador (crítico)
+  hard: { turn: 16, react: 0.95, delay: [0.05, 0.14], aggro: 1.6, block: 0.5, dodge: 0.5, lunge: 0.8, tell: 0.12, perfect: 0.45, chase: 0.85, grab: 0.28, mobility: 2.2, air: 1.5 },
 };
 const rand = (a, b) => a + Math.random() * (b - a);
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -29,6 +30,9 @@ export class Bot {
     I.mx = I.mz = 0;
     I.block = I.crouch = I.jumpHeld = false;
 
+    // giro do furacão: girando, mira na borda mais perto (taca na parede); sendo girado, não faz nada
+    if (me.grab) { if (Math.hypot(me.pos.x, me.pos.z) > 0.5) I.yaw = Math.atan2(-me.pos.x, -me.pos.z); this.yaw = I.yaw; return; }
+    if (me.heldBy) return;
     const dx = foe.pos.x - me.pos.x, dz = foe.pos.z - me.pos.z, dist = Math.hypot(dx, dz);
     const want = Math.atan2(-dx, -dz);
     if (me.atk?.kind === 'blink') this.yaw = I.yaw; // Passo Sombrio já deixa virado pro alvo
@@ -39,6 +43,19 @@ export class Bot {
     I.pitch = this.pitch;
     if (!active || me.ko || foe.ko) return;
     const facing = Math.abs(wrap(want - this.yaw)) < 0.45;
+
+    // tryhard: esquiva perfeita no último instante (vale pra qualquer golpe, até soco rápido)
+    const pw = foe.atk || foe.incoming > 0;
+    if (L.perfect && pw && this.pwSeen !== foe.atk && me.dashCd <= 0 && me.stunT <= 0 && me.perfectWindow(foe)) {
+      this.pwSeen = foe.atk;
+      if (Math.random() < L.perfect) { I.dodge = true; I.mx = Math.random() < 0.5 ? -1 : 1; }
+    }
+    // tryhard: oponente arremessado = dash atrás dele (cancela o fim do golpe que acertou) e soco voador
+    const flying = foe.stunT > 0 && (foe.pos.y > 0.3 || Math.hypot(foe.vel.x, foe.vel.z) > 6);
+    if (L.chase && flying && this.mode !== 'chase' && this.chased !== foe.comboN + ':' + foe.hp && dist > 2 && dist < 12 && me.charges > 0 && (!me.atk || me.atk.hit)) {
+      this.chased = foe.comboN + ':' + foe.hp;
+      if (Math.random() < L.chase) { this.mode = 'chase'; this.modeT = 0.8; this.step = 0; }
+    }
 
     // reage só ao soco pesado (soco rápido não dá pra reagir: o bot tem que prever, igual gente)
     const fa = foe.atk;
@@ -76,7 +93,7 @@ export class Bot {
       if (r === 'block') this.blockT = rand(0.3, 0.6);
       if (r === 'lowblock') { this.blockT = this.crouchT = 0.5; }
       if (r === 'jump') { I.jump = true; this.jumpT = 0.3; }
-      if (r === 'dodge') { I.dodge = true; I.mx = Math.random() < 0.5 ? -1 : 1; } // esquiva no E (perfeita se acertar o tempo)
+      if (r === 'dodge') { I.dodge = true; I.mx = Math.random() < 0.5 ? -1 : 1; } // esquiva no Q (perfeita se acertar o tempo)
     }
     if (this.blockT > 0) { this.blockT -= dt; I.block = true; }
     if (this.crouchT > 0) { this.crouchT -= dt; I.crouch = true; }
@@ -103,7 +120,12 @@ export class Bot {
       case 'dashin':
         I.mz = 1;
         if (this.step === 0 && facing && me.charges > 0) { I.dash = true; I.dashZ = 1; this.step = 1; this.modeT = 0.6; }
-        else if (this.step === 1 && me.sinceDash < 0.2 && dist < 3.4) { I.light = true; this.step = 2; }
+        else if (this.step === 1 && (me.sinceDash < 0.2 || me.sprinting) && dist < 3.4) { I.light = true; this.step = 2; }
+        break;
+      case 'chase':
+        I.mz = 1;
+        if (this.step === 0 && facing) { I.dash = true; I.dashZ = 1; this.step = 1; }
+        else if (this.step === 1 && dist < 3) { I.light = true; this.step = 2; }
         break;
       case 'slidein':
         I.mz = 1;
@@ -111,6 +133,25 @@ export class Bot {
         if (this.step >= 1) I.crouch = true;
         if (this.step === 1 && me.sliding && dist < 2.6) { I.light = true; this.step = 2; }
         break;
+    }
+
+    // tryhard: nunca fica parado — dash pros lados no meio da distância, pulo duplo e dash no ar
+    if (L.mobility && me.stunT <= 0 && !me.atk) {
+      if (dist > 3 && dist < 9 && me.charges > 1 && this.mode !== 'chase' && Math.random() < dt * L.mobility) {
+        I.dash = true; I.dashX = this.dir; I.dashZ = dist > 5 ? 0.6 : 0; this.dir *= -1;
+      }
+      // de perto: dash pro lado ou atravessa pra trás do oponente (cross-up) e já soca
+      if (dist <= 3 && me.charges > 1 && foe.stunT <= 0 && !this.tell && Math.random() < dt * L.mobility * 0.8) {
+        const cross = Math.random() < 0.35;
+        I.dash = true; I.dashX = cross ? 0 : this.dir; I.dashZ = cross ? 1 : 0.2; this.dir *= -1;
+        this.atkCd = Math.min(this.atkCd, 0.12);
+      }
+      if (me.grounded && dist > 3 && Math.random() < dt * L.air) { I.jump = true; this.jumpT = 0.25; }
+      if (!me.grounded && me.airJumps < 1 && me.vel.y < 1 && me.pos.y > 0.6 && Math.random() < L.air * 0.2) {
+        I.jump = true; this.jumpT = 0.2;
+      }
+      // depois do pulo duplo: dash no ar pra cima do oponente
+      if (me.airJumps === 1 && me.airDashes === 0 && me.charges > 0 && dist > 4 && Math.random() < dt * 3) { I.dash = true; I.dashZ = 1; }
     }
 
     // ataque: antes de bater o bot "arma" o golpe por um instante (me.tell) — é isso que o HUD avisa
@@ -147,7 +188,9 @@ export class Bot {
     if (!me.atk && facing && me.stunT <= 0) {
       const sp = SPECIALS[me.char]?.kind;
       const ok = sp === 'slam' ? dist < 4.2 && foe.grounded : sp === 'charge' ? dist > 2.5 && dist < 9 : sp === 'blink' ? dist > 3 && dist < 11 : dist > 4 && dist < 18;
-      if (me.meter >= T.costR && dist < 5 && Math.random() < dt * 1.5 * L.aggro) I.r = true;
+      // giro do furacão: colado, com energia e sem recarga
+      if (L.grab && me.meter >= T.costG && me.grabCd <= 0 && dist < 3 && !foe.ko && Math.random() < dt * 4 * L.grab) I.grab = true;
+      else if (me.meter >= T.costR && dist < 5 && Math.random() < dt * 1.5 * L.aggro) I.r = true;
       else if (me.meter >= T.costQ && ok && Math.random() < dt * 0.6 * L.aggro) I.q = true;
     }
     // meteoro quase caindo: defende ou esquiva

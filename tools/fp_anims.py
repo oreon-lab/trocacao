@@ -93,6 +93,9 @@ KL, KR = (0.34, -0.54, 1.27), (-0.36, -0.55, 1.26)          # defesa 3ª pessoa:
 POLE_OUT = {'l': (0.35, 0.3, 0.55), 'r': (-0.35, 0.3, 0.55)}
 POLE_IN = {'l': (0.15, -0.05, 0.6), 'r': (-0.15, -0.05, 0.6)}  # cotovelos fechados (defesa 1ª pessoa)
 POLE_X = {'l': (0.6, -0.25, 0.95), 'r': (-0.6, -0.25, 0.95)}  # cotovelos abertos (guarda em X)
+GSL, GSR = (0.50, -0.30, 0.98), (-0.50, -0.30, 0.98)        # giro: braços bem abertos pra frente (a cabeça de quem é girado passa entre eles)
+GFL, GFR = (0.58, -0.22, 1.20), (-0.58, -0.22, 1.20)        # girado (de barriga pra baixo no jogo): braços abertos pros lados da cabeça, pra aparecer segurando
+POLE_UP = {'l': (0.7, 0.25, 1.05), 'r': (-0.7, 0.25, 1.05)}  # cotovelos pra fora e pra trás (no jogo: pro céu)
 bob = lambda p, a=0.012: track([(0, p), (16, (p[0], p[1], p[2] + a)), (32, p)])
 zero = track([(0, 0.0), (32, 0.0)])
 CLIPS = {
@@ -137,6 +140,20 @@ CLIPS = {
                         tw=track([(0, 0.0), (8, -12.0), (16, 20.0), (30, 0.0)]),
                         lean=track([(0, 0.0), (8, -8.0), (16, 12.0), (30, 0.0)]),
                         chin=track([(0, 0.0), (8, 14.0), (16, -4.0), (30, 0.0)])),
+    # GIRO DO FURACÃO: quem gira segura as duas mãos do oponente com os braços esticados, corpo inclinado pra trás
+    # (contrapeso), joelhos dobrados; puxões curtos no ritmo do giro
+    'Grab_Spin': dict(n=16, legs=True, drop=0, tw=track([(0, 8.0), (16, 8.0)]),  # tw: traz o ombro direito pra frente (guarda base deixa ele pra trás)
+                      l=track([(0, GSL), (8, (GSL[0], GSL[1] - 0.04, GSL[2] + 0.02)), (16, GSL)]),
+                      r=track([(0, GSR), (8, (GSR[0], GSR[1] - 0.04, GSR[2] + 0.02)), (16, GSR)]),
+                      lean=track([(0, -34.0), (8, -38.0), (16, -34.0)]),
+                      crouch=track([(0, 0.10), (8, 0.12), (16, 0.10)]),
+                      hip=-16.0, chin=-18.0),
+    # quem é girado: braços segurando as mãos de quem gira (no jogo o corpo fica deitado de barriga pra baixo,
+    # cabeça pro centro); pernas balançando de leve
+    'Grabbed_Fly': dict(n=16, drop=0, tw=track([(0, -6.0), (8, 6.0), (16, -6.0)]), pole=POLE_UP,
+                        l=track([(0, GFL), (8, (GFL[0] + 0.03, GFL[1], GFL[2] - 0.02)), (16, GFL)]),
+                        r=track([(0, GFR), (8, (GFR[0] + 0.03, GFR[1], GFR[2] - 0.02)), (16, GFR)]),
+                        lean=-6.0, hip=track([(0, 6.0), (8, -4.0), (16, 6.0)]), chin=18.0),
 }
 val = lambda v, f: v(f) if callable(v) else v
 

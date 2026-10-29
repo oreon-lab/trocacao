@@ -5,6 +5,7 @@ import { T, ATTACKS, SPECIALS } from './config.js';
 export const events = [];
 
 export const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 export const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 
 const _o = new THREE.Vector3(), _e = new THREE.Vector3(), _d = new THREE.Vector3();
@@ -13,7 +14,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _hit = new THREE.Vecto
 // Input abstrato: o jogador (teclado/mouse) e o bot preenchem a mesma coisa.
 // mx = direita, mz = frente. jump/dash/light/heavy são "apertou neste frame" e são consumidos.
 export function emptyInput() {
-  return { mx: 0, mz: 0, yaw: 0, pitch: 0, jump: false, jumpHeld: false, dash: false, dashX: 0, dashZ: 0, crouch: false, light: false, heavy: false, block: false, dodge: false, q: false, r: false };
+  return { mx: 0, mz: 0, yaw: 0, pitch: 0, jump: false, jumpHeld: false, dash: false, dashX: 0, dashZ: 0, crouch: false, light: false, heavy: false, block: false, dodge: false, grab: false, q: false, r: false };
 }
 
 // Distância mínima entre os segmentos p1q1 e p2q2; escreve em `out` o ponto mais próximo do primeiro.
@@ -31,6 +32,9 @@ export function segSeg(p1, q1, p2, q2, out) {
   const qx = p2.x + d2x * t - out.x, qy = p2.y + d2y * t - out.y, qz = p2.z + d2z * t - out.z;
   return Math.sqrt(qx * qx + qy * qy + qz * qz);
 }
+
+// golpe crítico: muito mais dano e arremessa lá pra trás
+export const critDef = def => ({ ...def, dmg: def.dmg * T.critMul, knock: def.knock * T.critKnock, up: Math.max(def.up, 5), stun: def.stun * 1.4 });
 
 export class Fighter {
   constructor(name, color) {
@@ -53,11 +57,11 @@ export class Fighter {
     Object.assign(this, {
       height: T.standHeight, grounded: true, coyoteT: 0, jumpBufT: 0, jumpCutDone: true,
       crouching: false, sliding: false, slideT: 0, slideLock: false,
-      dashT: 0, dashCd: 0, charges: T.dashCharges, rechargeT: 0, airDashes: 0, sinceDash: 9,
+      dashT: 0, dashCd: 0, charges: T.dashCharges, rechargeT: 0, airDashes: 0, airJumps: 0, sinceDash: 9, sprinting: false, bounced: false,
       hp: T.hp, stunT: 0, blocking: false, blockT: 0,
       atk: null, queued: null, queueT: 0, hand: 1, flashT: 0, ko: false, // hand 1 -> 1º soco rápido = jab (esquerda)
       walkPhase: 0, landImpact: 0, comboN: 0, comboT: 0, tell: null,
-      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0,
+      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, grab: null, heldBy: null, thrown: null, grabCd: 0,
     });
   }
 
@@ -99,14 +103,24 @@ export class Fighter {
     this.counterT = Math.max(0, this.counterT - dt);
     this.incoming = Math.max(0, this.incoming - dt);
     this.flashT = Math.max(0, this.flashT - dt);
+    this.grabCd = Math.max(0, this.grabCd - dt);
     this.dashCd -= dt;
     this.sinceDash += dt;
-    if (this.charges < T.dashCharges && (this.rechargeT += dt) >= T.dashRecharge) { this.charges++; this.rechargeT = 0; }
+    // defendendo recarrega mais devagar (quem ataca é recompensado)
+    if (this.charges < T.dashCharges && (this.rechargeT += dt * (this.blocking ? T.dashBlockRecharge : 1)) >= T.dashRecharge) { this.charges++; this.rechargeT -= T.dashRecharge; }
     this.jumpBufT -= dt;
     if (I.jump) this.jumpBufT = T.jumpBuffer;
     this.coyoteT = this.grounded ? T.coyote : this.coyoteT - dt;
     if ((this.queueT -= dt) <= 0) this.queued = null;
     if ((this.comboT -= dt) <= 0) this.comboN = 0;
+
+    // giro do furacão: quem gira controla tudo; quem é girado só é carregado
+    if (this.heldBy || this.grab) {
+      if (this.grab) this.updateGrab(dt, arena);
+      I.jump = I.dash = I.light = I.heavy = I.dodge = I.grab = I.q = I.r = false;
+      I.dashX = I.dashZ = 0;
+      return;
+    }
 
     // direção desejada no mundo
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
@@ -147,7 +161,7 @@ export class Fighter {
     const hTarget = this.sliding ? T.slideHeight : this.crouching ? T.crouchHeight : T.standHeight;
     this.height = damp(this.height, hTarget, 18, dt);
 
-    // esquiva (E): desvio rápido pro lado (ou pra onde o WASD aponta). Na hora certa = ESQUIVA PERFEITA:
+    // esquiva (Q): desvio rápido pro lado (ou pra onde o WASD aponta). Na hora certa = ESQUIVA PERFEITA:
     // não gasta carga, fica invencível mais tempo, dá contra-ataque e energia.
     if (I.dodge && canAct && this.dashCd <= 0) {
       const perfect = this.perfectWindow(foe);
@@ -174,6 +188,11 @@ export class Fighter {
       dx /= l; dz /= l;
       this.dashLocal = { x: dx, z: dz };
       this.dashDir.set(fx * dz + rx * dx, 0, fz * dz + rz * dx);
+      // perseguição: dash pra frente com o oponente arremessado na frente = vai direto nele
+      if (dz > 0 && foe && foe.stunT > 0 && (foe.pos.y > 0.3 || Math.hypot(foe.vel.x, foe.vel.z) > 6) && this.inCone(foe, 12, T.dashChaseCone)) {
+        this.dashDir.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize();
+        events.push({ type: 'chase', f: this });
+      }
       this.dashT = T.dashTime;
       this.dashCd = T.dashTime + T.dashCooldown;
       this.charges--;
@@ -181,9 +200,15 @@ export class Fighter {
       this.sliding = false;
       this.sinceDash = 0;
       this.blocking = false;
-      if (this.atk && this.atk.phase !== 'active') this.atk = null; // dash cancela golpe (fintas)
+      this.bounced = false;
+      if (this.grounded && dz > 0.3) this.sprinting = true; // dash pra frente no chão emenda em corrida
+      // dash cancela golpe: finta no windup, e depois que acertou dá pra cancelar a qualquer hora e emendar
+      if (this.atk && (this.atk.phase !== 'active' || this.atk.hit)) this.atk = null;
       events.push({ type: 'dash', f: this });
     }
+
+    // corrida: continua enquanto segura frente; defender, agachar, golpear ou apanhar para
+    if (!canAct || I.mz <= 0 || this.blocking || this.crouching || (this.atk && this.dashT <= 0)) this.sprinting = false;
 
     // velocidade
     if (this.dashT > 0) {
@@ -194,7 +219,7 @@ export class Fighter {
       const k = Math.max(0, hs - T.slideDecel * dt) / hs;
       this.vel.x *= k; this.vel.z *= k;
     } else {
-      let max = this.crouching ? T.crouchSpeed : T.walkSpeed;
+      let max = this.crouching ? T.crouchSpeed : this.sprinting ? T.sprintSpeed : T.walkSpeed;
       if (this.blocking) max *= T.blockSpeedMul;
       if (this.atk?.def.moveMul) max *= this.atk.def.moveMul;
       let tx = wx * max, tz = wz * max, rate;
@@ -223,16 +248,25 @@ export class Fighter {
       this.jumpCutDone = false;
       this.sliding = false;
       events.push({ type: 'jump', f: this });
+    } else if (I.jump && !this.grounded && this.pos.y > 0.4 && this.airJumps < 1 && canAct && this.dashT <= 0 && !this.atk) {
+      // pulo duplo: devolve o dash do ar (pula, dash, pula, dash)
+      this.vel.y = T.doubleJumpVel;
+      this.airJumps++;
+      this.airDashes = 0;
+      this.jumpCutDone = false;
+      this.jumpBufT = 0;
+      events.push({ type: 'jump', f: this, double: true });
     }
     if (!I.jumpHeld && !this.jumpCutDone && this.vel.y > 0) { this.vel.y *= T.jumpCut; this.jumpCutDone = true; }
-    if (this.dashT <= 0 && !this.grounded) this.vel.y -= T.gravity * (this.vel.y < 0 ? T.fallMul : 1) * dt;
+    if (this.dashT <= 0 && !this.grounded) this.vel.y -= T.gravity * (this.vel.y < 0 ? T.fallMul : 1) * (this.thrown ? T.throwGravity : 1) * dt;
 
     // integra
     this.pos.addScaledVector(this.vel, dt);
     if (this.pos.y <= 0) {
       if (!this.grounded) {
         this.landImpact = Math.min(1, -this.vel.y / 18);
-        this.airDashes = 0;
+        this.airDashes = this.airJumps = 0;
+        this.thrown = null; // arremessado caiu no chão sem bater na parede
         events.push({ type: 'land', f: this, v: -this.vel.y });
       }
       this.pos.y = 0;
@@ -245,10 +279,11 @@ export class Fighter {
     // golpes
     // clique durante o atordoamento fica guardado e sai assim que der (não some mais)
     if (!this.ko && (I.light || I.heavy)) { this.queued = I.heavy ? 'heavy' : 'light'; this.queueT = 0.25; }
-    // poderes: R = super soco (barra cheia), Q = habilidade do lutador
-    if (canAct && !this.atk && !this.blocking && (I.q || I.r)) {
+    // poderes: R = super soco (barra cheia), E = habilidade do lutador, G = giro do furacão (energia + recarga)
+    if (canAct && !this.atk && !this.blocking && (I.q || I.r || I.grab)) {
       if (I.r && this.meter >= T.costR) { this.meter -= T.costR; this.startAttack('super', foe); }
       else if (I.q && this.meter >= T.costQ) { this.meter -= T.costQ; this.startAttack(SPECIALS[this.char]?.kind || 'slam', foe); }
+      else if (I.grab && this.meter >= T.costG && this.grabCd <= 0 && foe && !foe.remote) { this.grabCd = T.grabWhiffCd; this.startAttack('grab', foe); } // a energia só sai se pegar
       else events.push({ type: 'noMeter', f: this });
     }
     if (this.queued && !this.atk && canAct && !this.blocking) this.startAttack(this.queued, foe);
@@ -289,7 +324,7 @@ export class Fighter {
       if (this.atk && a.phase === 'recovery' && a.t >= d.recovery * (a.hit ? 0.6 : 1)) this.atk = null;
     }
 
-    I.jump = I.dash = I.light = I.heavy = I.dodge = I.q = I.r = false;
+    I.jump = I.dash = I.light = I.heavy = I.dodge = I.grab = I.q = I.r = false;
     I.dashX = I.dashZ = 0;
   }
 
@@ -304,14 +339,15 @@ export class Fighter {
     this.queued = null;
     let k = kind;
     if (this.sliding && (kind === 'light' || kind === 'heavy')) k = 'sweep';
-    else if (kind === 'light' && (this.dashT > 0 || this.sinceDash < 0.18)) k = 'lunge';
+    else if (kind === 'light' && (this.dashT > 0 || this.sinceDash < 0.18 || this.sprinting)) k = 'lunge'; // soco voador
     const def = ATTACKS[k];
     this.atk = { id: (this.atkN = (this.atkN || 0) + 1), kind: k, def, t: 0, phase: 'windup', hit: false, hand: k === 'light' ? (this.hand ^= 1) : 1 };
     // passo à frente: o soco "anda" até o oponente se ele tá quase no alcance
     if (k === 'blink') this.invulnT = Math.max(this.invulnT, def.windup + 0.04); // some na fumaça
+    if (k === 'grab') { this.dashT = 0; this.vel.multiplyScalar(0.2); } // freia o dash (senão atravessa o oponente)
     const d = foe && k !== 'sweep' && !def.special && k !== 'super' ? this.inCone(foe, 4.5, 0.75) : 0;
     if (d > 1.1) {
-      const v = Math.min(k === 'lunge' ? 9 : k === 'heavy' ? 5 : 3.5, (d - 1.0) * 6);
+      const v = Math.min(k === 'lunge' || k === 'grab' ? 9 : k === 'heavy' ? 5 : 3.5, (d - 1.0) * 6);
       this.vel.x += (foe.pos.x - this.pos.x) / d * v;
       this.vel.z += (foe.pos.z - this.pos.z) / d * v;
     } else if (k === 'lunge') {
@@ -366,6 +402,52 @@ export class Fighter {
     events.push({ type: 'blink', f: this, from, to: this.pos.clone() });
   }
 
+  // ---- GIRO DO FURACÃO ----
+  startGrab(foe) {
+    this.atk = null;
+    this.meter -= T.costG; // pegou: agora sim gasta a energia e começa a recarga
+    this.grabCd = T.grabCooldown;
+    this.grab = { victim: foe, t: 0, ang: Math.atan2(-(foe.pos.x - this.pos.x), -(foe.pos.z - this.pos.z)), prevD: 0, turns: 0 };
+    Object.assign(foe, { heldBy: this, thrown: null, atk: null, tell: null, blocking: false, sliding: false, dashT: 0, sprinting: false, queued: null });
+    this.sprinting = false;
+    events.push({ type: 'grab', f: this, victim: foe, point: foe.pos.clone().setY(1.1) });
+  }
+  updateGrab(dt, arena) {
+    const g = this.grab, v = g.victim, R = T.spinRadius;
+    g.t += dt;
+    const w = T.spinW0 + (T.spinW1 - T.spinW0) * Math.min(1, g.t / T.spinTime); // acelera
+    g.ang += w * dt;
+    g.turns += (w * dt) / (Math.PI * 2);
+    // longe da borda pra caber o giro (pilar fica de fora: o corpo passa por cima)
+    this.vel.set(0, 0, 0);
+    this.pos.y = 0;
+    this.grounded = true;
+    const r = Math.hypot(this.pos.x, this.pos.z), lim = arena.R - R - 0.5;
+    if (r > lim) { const k = Math.max(lim / r, 1 - 6 * dt); this.pos.x *= k; this.pos.z *= k; }
+    this.invulnT = Math.max(this.invulnT, 0.05);
+    const fx = -Math.sin(g.ang), fz = -Math.cos(g.ang);
+    v.pos.set(this.pos.x + fx * R, T.spinHeight + Math.sin(g.t * 17) * 0.06, this.pos.z + fz * R);
+    v.vel.set(fz * w * R, 0, -fx * w * R); // velocidade tangente (rastro, efeitos)
+    Object.assign(v, { grounded: false, stunT: Math.max(v.stunT, 0.4), invulnT: Math.max(v.invulnT, 0.05) });
+    // solta quando a vítima passa pela direção da mira (depois do giro mínimo)
+    const d = wrapA(g.ang - this.yaw);
+    if ((g.t >= T.spinMin && g.prevD < 0 && d >= 0 && d < 1) || g.t >= T.spinTime + 0.45 || v.ko) this.throwFoe();
+    else g.prevD = d;
+  }
+  throwFoe() {
+    const v = this.grab.victim, aim = this.forward(_d), from = v.pos.clone();
+    this.grab = null;
+    v.heldBy = null;
+    v.pos.set(this.pos.x + aim.x * T.spinRadius, T.spinHeight, this.pos.z + aim.z * T.spinRadius);
+    v.vel.set(aim.x * T.throwSpeed, T.throwUp, aim.z * T.throwSpeed);
+    Object.assign(v, { thrown: this, bounced: false, stunT: 1.1, flashT: 0.12, comboN: 0, comboT: 0, jumpCutDone: true, grounded: false });
+    v.hp -= T.throwDmg;
+    v.checkKO();
+    this.gain(10);
+    this.dashCd = 0.15;
+    events.push({ type: 'throw', f: this, victim: v, point: v.pos.clone(), from, dmg: T.throwDmg });
+  }
+
   // Terremoto: onda no chão em volta; quem está no ar (pulou) escapa
   aoeHit(foe) {
     const d = this.atk.def, dist = Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z);
@@ -377,6 +459,12 @@ export class Fighter {
   tryHit(foe) {
     if (foe.ko || foe.invuln) return;
     if (this.reach(foe, this.atk.def) > 0) return;
+    // slide passa por baixo de soco alto
+    if (foe.sliding && !this.atk.def.low) {
+      if (!this.atk.under) { this.atk.under = true; events.push({ type: 'under', f: foe, point: foe.pos.clone().setY(1) }); }
+      return;
+    }
+    if (this.atk.kind === 'grab') { if (foe.pos.y < 1.2 && !foe.grab && !foe.heldBy) this.startGrab(foe); return; } // agarrão passa pela defesa
     this.land(foe, this.atk.def);
   }
 
@@ -387,11 +475,14 @@ export class Fighter {
     // contra-ataque depois de uma esquiva perfeita: golpe mais forte
     const mul = this.counterT > 0 ? T.counterMul : 1;
     if (mul > 1) { def = { ...def, dmg: def.dmg * mul, knock: def.knock * 1.3 }; this.counterT = 0; }
+    const crit = kind === 'lunge' && Math.random() < T.critChance;
+    if (crit) def = critDef(def);
     // online: quem apanha decide o resultado (defesa/parry/acerto) na máquina dele
-    if (foe.remote) return foe.onRemoteHit(kind, point, mul);
+    if (foe.remote) return foe.onRemoteHit(kind, point, mul, crit);
     const result = foe.receive(this, def);
     this.gain(result === 'hit' ? 7 : result === 'break' ? 6 : result === 'block' ? 2 : 0);
-    events.push({ type: result, f: this, victim: foe, kind, point, dmg: Math.round(def.dmg), combo: foe.comboN, counter: mul > 1 });
+    if (result === 'hit' && this.charges < T.dashCharges) this.rechargeT += T.dashRecharge * T.dashHitRefund;
+    events.push({ type: result, f: this, victim: foe, kind, point, dmg: Math.round(def.dmg), combo: foe.comboN, counter: mul > 1, crit });
   }
 
   receive(att, def) {
@@ -442,15 +533,17 @@ export class Fighter {
     // cada hit seguido atordoa menos; o último da sequência arremessa (dá chance de reagir)
     this.comboN = this.comboT > 0 ? this.comboN + 1 : 1;
     this.comboT = 0.9;
-    const fin = this.comboN >= T.comboMax;
+    const fin = this.comboN >= T.comboMax, air = !this.grounded; // no ar: cada golpe levanta mais (malabarismo)
     this.hp -= def.dmg;
     this.stunT = def.stun * Math.max(0.35, 1 - T.comboDecay * (this.comboN - 1));
     this.atk = null;
     this.tell = null;
     this.sliding = false;
     this.dashT = 0;
+    this.sprinting = false;
+    this.bounced = false;
     this.flashT = 0.12;
-    knock(fin ? 1.8 : 1, fin ? Math.max(def.up, 4) : def.up);
+    knock(fin ? 1.8 : 1, fin ? Math.max(def.up, 4) : air ? Math.max(def.up, 5.5) : def.up);
     if (fin) this.comboT = 0;
     this.gain(4);
     this.checkKO();

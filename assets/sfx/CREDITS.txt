@@ -1,0 +1,38 @@
+Sons do jogo — todos de uso livre (CC0, domínio público). Cortados/normalizados por tools/sfx_build.py a partir de:
+
+LUTA
+- "Impact Sounds" — Kenney (www.kenney.nl) — CC0 — https://kenney.nl/assets/impact-sounds
+    socos (impactPunch), baques de corpo (impactSoft), defesa (madeira), parry (metal), quebra (placa), passos no concreto
+- "Punch" — qubodup — CC0 — https://opengameart.org/content/punch
+    estalo por cima do soco
+- "Swish - bamboo stick weapon swooshes" — qubodup — CC0 — https://opengameart.org/content/swish-bamboo-stick-weapon-swhoshes
+    golpes no ar, dash
+- "Medieval Sound Effects: Weapon Textures" — Ben Jaszczak & Brian Nelson — CC0 — https://opengameart.org/content/medieval-sound-effects-weapon-textures
+    adaga e machado cortando o ar
+- "Male grunt/yelling sounds" — HaelDB — CC0 — https://opengameart.org/content/male-gruntyelling-sounds
+    gemidos e gritos (masculino)
+- "Grunts: male death and pain" — thebardofblasphemy — CC0 — https://opengameart.org/content/grunts-male-death-and-pain
+    gemidos e dor no K.O. (masculino)
+- "Female hurt grunts/groans" — Nocturnal_Vanguard — CC0 — https://opengameart.org/content/female-hurt-grunts-groans
+    gemidos e dor (Ladina)
+- "50 RPG sound effects" — Kenney — CC0 — https://opengameart.org/content/50-rpg-sound-effects
+    pano (pulo), couro caindo, facas
+- "75 CC0 breaking, falling, hit sfx" — rubberduck — CC0 — https://opengameart.org/content/75-cc0-breaking-falling-hit-sfx
+    madeira/pedra quebrando, cascalho (slide)
+
+PODERES E EFEITOS
+- "Sci-fi Sounds" — Kenney — CC0 — https://opengameart.org/content/sci-fi-sounds
+    magia (campo de força), explosões, estrondo grave, ronco do meteoro caindo
+- "100 CC0 SFX" — rubberduck — CC0 — https://opengameart.org/content/100-cc0-sfx
+    sinos (boxe, brilho), gongo
+- "25 CC0 bang / firework SFX" — rubberduck — CC0 — https://opengameart.org/content/25-cc0-bang-firework-sfx
+    canhão (terremoto)
+- "Muffled distant explosion" — NenadSimic — CC0 — https://opengameart.org/content/muffled-distant-explosion
+- "Wind whoosh loop" — SketchMan3 — CC0 — https://opengameart.org/content/wind-whoosh-loop
+    vento do giro do furacão
+
+LOCUTOR E TORCIDA
+- "Voiceover Pack: Fighter" — Kenney — CC0 — https://opengameart.org/content/voiceover-pack-fighter-40-taunts
+- "Arena Combat Announcer Pack" — blacklodgegames — CC0 — https://opengameart.org/content/27-metal-audio-samples-sfx
+- "Crowd shouting/speaking ambience" — StarNinjas — CC0 — https://opengameart.org/content/crowd-shoutingspeaking-ambience
+- "Applause in a large hall or church" — eXpl0it3r — CC0 — https://opengameart.org/content/applause-in-a-large-hall-or-church

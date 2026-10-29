@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modelos do cenário</title>
+<style>
+  body { margin: 0; background: #dff0ff; font: 12px system-ui, sans-serif; color: #16121f; }
+  canvas { display: block; width: 100vw; height: 82vh; }
+  #out { padding: 6px 10px; columns: 4; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="out"></div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+// Folha dos modelos de cenário (KayKit): todos lado a lado, com o tamanho (largura x altura x fundo) de cada um.
+// http://localhost:5173/env_check.html?set=dungeon  |  ?set=hex  |  ?only=wall,barrier
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ENV_MODELS } from './src/envmodels.js';
+
+const p = new URLSearchParams(location.search);
+const set = p.get('set') || 'dungeon', only = p.get('only')?.split(',');
+const names = (only || ENV_MODELS[set]);
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setSize(innerWidth, innerHeight * 0.82, false);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xdff0ff);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9ab0c8, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(5, 10, 7); scene.add(sun);
+const loader = new GLTFLoader(), out = [];
+const cols = Math.ceil(Math.sqrt(names.length * 1.6)), gap = 5.5;
+let i = 0;
+for (const n of names) {
+  const url = set === 'dungeon' || n.startsWith('dungeon/') ? `assets/env/dungeon/${n.replace('dungeon/', '')}.glb` : `assets/env/hex/${n.replace('hex/', '')}.gltf`;
+  const g = (await loader.loadAsync(url)).scene;
+  const box = new THREE.Box3().setFromObject(g), s = box.getSize(new THREE.Vector3());
+  const k = Math.min(1, 4 / Math.max(s.x, s.y, s.z)); // modelos grandes encolhem pra caber (o tamanho real vai no texto)
+  g.scale.setScalar(k);
+  const x = (i % cols) * gap, z = Math.floor(i / cols) * gap;
+  g.position.set(x - (box.min.x + s.x / 2) * k, -box.min.y * k, z - (box.min.z + s.z / 2) * k);
+  scene.add(g);
+  out.push(`<b>${i}</b> ${n}: ${s.x.toFixed(2)} × ${s.y.toFixed(2)} × ${s.z.toFixed(2)}${k < 1 ? ` (mostrado a ${(k * 100) | 0}%)` : ''}`);
+  i++;
+}
+document.getElementById('out').innerHTML = out.join('<br>');
+const rows = Math.ceil(names.length / cols), cx = (cols - 1) * gap / 2, cz = (rows - 1) * gap / 2;
+const cam = new THREE.PerspectiveCamera(40, innerWidth / (innerHeight * 0.82), 0.1, 500);
+cam.position.set(cx, Math.max(cols, rows) * gap * 0.95, cz + Math.max(cols, rows) * gap * 0.75);
+cam.lookAt(cx, 0, cz);
+renderer.render(scene, cam);
+window.done = true;
+</script>
+</body>
+</html>

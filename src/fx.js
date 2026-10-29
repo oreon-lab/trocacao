@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { toonMat, addOutline } from './toon.js';
+import { T } from './config.js';
+import { SFX_FILES } from './sfxlist.js';
 
 // ---------- partículas / estrelas de impacto / rastro do dash ----------
 const matCache = new Map();
@@ -142,6 +144,45 @@ const slashTex = canvasTex(256, (g, s) => {
   g.arc(28, 28, 108, 0, Math.PI * 2);
   g.fill();
 });
+
+// vento do furacão: riscos diagonais brancos com transparência (repete na horizontal)
+const windTex = (() => {
+  const t = canvasTex(256, (g, s) => {
+    g.lineCap = 'round';
+    for (let i = 0; i < 46; i++) {
+      const x = Math.random() * s, y = Math.random() * s, len = 40 + Math.random() * 120, w = 3 + Math.random() * 9;
+      g.strokeStyle = `rgba(255,255,255,${0.6 + Math.random() * 0.4})`;
+      g.lineWidth = w;
+      for (const dx of [-s, 0, s]) { // emenda sem costura nas bordas
+        g.beginPath();
+        g.moveTo(x + dx, y);
+        g.lineTo(x + dx + len, y - len * 0.28);
+        g.stroke();
+      }
+    }
+  });
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+})();
+// faixa em arco no plano do chão (rastro do corpo girando): mais forte na frente, some pra trás
+function arcGeo(r0, r1, len, n = 28) {
+  const pos = [], col = [], idx = [];
+  for (let i = 0; i <= n; i++) {
+    const th = -(i / n) * len, a = Math.pow(1 - i / n, 1.6);
+    for (const r of [r0, r1]) {
+      pos.push(-Math.sin(th) * r, 0, -Math.cos(th) * r);
+      col.push(1, 1, 1, a * (r === r0 ? 0.35 : 1));
+    }
+    if (i < n) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  g.setIndex(idx);
+  return g;
+}
+
+const T_SPIN = gr => T.spinW0 + (T.spinW1 - T.spinW0) * Math.min(1, gr.t / T.spinTime); // mesma rampa do giro no fighter
 
 const toonCache = new Map();
 const toon = c => { if (!toonCache.has(c)) toonCache.set(c, toonMat(c)); return toonCache.get(c); };
@@ -497,6 +538,71 @@ export class FX {
     this.scene.remove(g);
     for (const m of [g.userData.mat, g.userData.glow.material, g.userData.cross.material]) m.dispose();
   }
+  // ---- GIRO DO FURACÃO: funil de vento em volta de quem gira + rastro do corpo + poeira (o main chama tornadoUpdate todo frame)
+  tornado(color) {
+    const g = new THREE.Group();
+    const layers = [];
+    // [raio em cima, raio embaixo, altura, velocidade do giro, repetições do risco, opacidade]
+    for (const [rt, rb, h, sp, rep, op] of [[3.1, 1.1, 3.4, 1, 3, 1], [2.4, 0.75, 2.7, 1.45, 2, 0.55], [3.6, 2.2, 1.1, 0.8, 4, 0.8]]) {
+      const tex = windTex.clone();
+      tex.repeat.set(rep, 1);
+      tex.needsUpdate = true;
+      const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xeaf6ff, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 48, 1, true).translate(0, h / 2, 0), mat);
+      m.renderOrder = 4;
+      g.add(m);
+      layers.push({ m, mat, tex, sp, op });
+    }
+    // faixas do rastro: uma na altura do corpo, uma mais fina em cima, uma na cor do lutador
+    const arcs = [[0.3, 2.6, 2.2, 0xffffff, 0.75, 0], [1.2, 2.9, 1.5, 0xffffff, 0.45, 0.45], [0.6, 2.4, 1.2, color, 0.55, -0.25]].map(([r0, r1, len, c, op, dy]) => {
+      const mat = new THREE.MeshBasicMaterial({ color: c, vertexColors: true, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+      const m = new THREE.Mesh(arcGeo(r0, r1, len), mat);
+      m.renderOrder = 5;
+      g.add(m);
+      return { m, mat, op, dy };
+    });
+    g.userData = { layers, arcs, t: 0, color };
+    this.scene.add(g);
+    return g;
+  }
+  tornadoUpdate(g, f, dt) {
+    const u = g.userData, gr = f.grab;
+    if (!gr || dt <= 0) return;
+    u.t += dt;
+    const k = Math.min(1, u.t / 0.2), w = T_SPIN(gr), sp = w / T.spinW1;
+    g.position.set(f.pos.x, 0.02, f.pos.z);
+    g.scale.set(0.75 + 0.25 * k, 0.6 + 0.4 * k, 0.75 + 0.25 * k);
+    for (const l of u.layers) {
+      l.m.rotation.y += w * l.sp * 0.55 * dt;
+      l.tex.offset.y -= dt * 0.9 * l.sp;
+      l.mat.opacity = l.op * k * (0.55 + 0.45 * sp);
+    }
+    for (const a of u.arcs) {
+      a.m.rotation.y = gr.ang;
+      a.m.position.y = gr.victim.pos.y + a.dy;
+      a.mat.opacity = a.op * k * (0.4 + 0.6 * sp);
+    }
+    // poeira e vento espiralando
+    if (Math.random() < dt * 40 * this.density) {
+      const ang = Math.random() * Math.PI * 2, r = 1.2 + Math.random() * 1.8, y = Math.random() * 2.6;
+      const p = new THREE.Vector3(f.pos.x - Math.sin(ang) * r, y, f.pos.z - Math.cos(ang) * r);
+      const tg = new THREE.Vector3(-Math.cos(ang), 0.8, Math.sin(ang)).multiplyScalar(w * r * 0.5);
+      this.puff(p, 0xffffff, 0.35 + Math.random() * 0.3, 0.3, tg);
+    }
+    if (Math.random() < dt * 9 * this.density) {
+      const ang = Math.random() * Math.PI * 2, r = 1.6 + Math.random() * 1.2;
+      this.cloud(new THREE.Vector3(f.pos.x - Math.sin(ang) * r, 0.1, f.pos.z - Math.cos(ang) * r), 0xe8d9b8, 0.12 + Math.random() * 0.12,
+        new THREE.Vector3(-Math.cos(ang) * 6, 1.5, Math.sin(ang) * 6), 0.45);
+    }
+  }
+  tornadoOff(g) {
+    const u = g.userData, mats = [...u.layers.map(l => l.mat), ...u.arcs.map(a => a.mat)], op = mats.map(m => m.opacity);
+    this.list.push({ obj: g, life: 0.35, t: 0, update: (dt, k) => {
+      mats.forEach((m, i) => (m.opacity = op[i] * (1 - k)));
+      g.scale.multiplyScalar(1 + dt * 1.2);
+      u.layers.forEach(l => (l.m.rotation.y += dt * 8));
+    }, dispose: () => { for (const c of g.children) { c.geometry.dispose(); c.material.map?.dispose(); c.material.dispose(); } } });
+  }
   holy(p, color) {
     this.rays(p, color, 14, 2.8);
     this.rays(p, 0xffffff, 8, 1.6, 0.25);
@@ -640,66 +746,127 @@ export class FX {
   }
 }
 
-// ---------- sons sintetizados (sem arquivos) ----------
-let ac, noiseBuf;
+// ---------- sons: arquivos CC0 de verdade (assets/sfx, fontes em assets/sfx/CREDITS.txt) ----------
+// Cada "grupo" tem variações (punch_l1..6) e cada toque sai com um tom levemente diferente: nenhum soco soa igual.
 export const audio = { volume: 0.6 };
+const FILES = SFX_FILES;
+// grupo = nome sem o número no fim (punch_l3 -> punch_l)
+const GROUPS = {};
+for (const f of FILES) (GROUPS[f.startsWith('v_') ? f : f.replace(/\d+$/, '')] ||= []).push(f); // falas do locutor (v_round_1...) não se agrupam
+let ac, master, bus, crowdG, windG, windSrc;
+const bufs = {}, lastPick = {};
 function ctx() {
   if (!ac) {
     ac = new AudioContext();
-    noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const comp = ac.createDynamicsCompressor(); // segura o pico quando vários sons batem juntos
+    comp.threshold.value = -14;
+    comp.ratio.value = 4;
+    master = ac.createGain();
+    master.connect(comp).connect(ac.destination);
+    bus = { sfx: ac.createGain(), voice: ac.createGain(), amb: ac.createGain() };
+    for (const b of Object.values(bus)) b.connect(master);
+    for (const f of FILES) {
+      fetch(`assets/sfx/${f}.ogg`).then(r => r.arrayBuffer()).then(b => ac.decodeAudioData(b)).then(d => {
+        bufs[f] = d;
+        if (f === 'crowd') crowdG = loop(d, 'amb');
+        if (f === 'wind') [windG, windSrc] = [loop(d, 'amb'), lastLoop];
+      }).catch(() => {});
+    }
   }
   if (ac.state === 'suspended') ac.resume();
+  master.gain.value = audio.volume;
   return ac;
 }
-function env(g, t0, peak, dur) {
-  g.gain.setValueAtTime(0.0001, t0);
-  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * audio.volume), t0 + 0.005);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+let lastLoop;
+function loop(buffer, b) {
+  const s = ac.createBufferSource(), g = ac.createGain();
+  s.buffer = buffer;
+  s.loop = true;
+  g.gain.value = 0;
+  s.connect(g).connect(bus[b]);
+  s.start();
+  lastLoop = s;
+  return g;
 }
-function tone(f0, f1, dur, peak, type = 'sine') {
-  const c = ctx(), t = c.currentTime, o = c.createOscillator(), g = c.createGain();
-  o.type = type;
-  o.frequency.setValueAtTime(f0, t);
-  o.frequency.exponentialRampToValueAtTime(f1, t + dur);
-  env(g, t, peak, dur);
-  o.connect(g).connect(c.destination);
-  o.start(t);
-  o.stop(t + dur + 0.02);
+// toca uma variação do grupo (sem repetir a mesma duas vezes seguidas)
+function play(group, v = 1, o = {}) {
+  const c = ctx(), list = GROUPS[group];
+  if (!list || v <= 0.001) return null;
+  let i = (Math.random() * list.length) | 0;
+  if (list.length > 1 && i === lastPick[group]) i = (i + 1) % list.length;
+  lastPick[group] = i;
+  const buf = bufs[list[i]];
+  if (!buf) return null;
+  const s = c.createBufferSource(), g = c.createGain();
+  s.buffer = buf;
+  s.playbackRate.value = (o.rate || 1) * (1 + (Math.random() * 2 - 1) * (o.rv ?? 0.06));
+  g.gain.value = v;
+  s.connect(g).connect(bus[o.bus || 'sfx']);
+  s.start(c.currentTime + (o.delay || 0));
+  return { s, g, t: c.currentTime };
 }
-function noise(dur, peak, type, f0, f1, q = 1) {
-  const c = ctx(), t = c.currentTime, s = c.createBufferSource(), fl = c.createBiquadFilter(), g = c.createGain();
-  s.buffer = noiseBuf;
-  fl.type = type;
-  fl.Q.value = q;
-  fl.frequency.setValueAtTime(f0, t);
-  fl.frequency.exponentialRampToValueAtTime(f1, t + dur);
-  env(g, t, peak, dur);
-  s.connect(fl).connect(g).connect(c.destination);
-  s.start(t, Math.random() * 0.5);
-  s.stop(t + dur + 0.02);
+// locutor: uma fala por vez (as do round sempre passam); a torcida abaixa um pouco enquanto ele fala
+let voiceT = 0, voiceSrc = null;
+function voice(name, { force = false, delay = 0, v = 1 } = {}) {
+  const c = ctx(), now = c.currentTime;
+  if (!force && now < voiceT) return;
+  if (force && voiceSrc) try { voiceSrc.stop(); } catch {}
+  const p = play('v_' + name, v, { bus: 'voice', rv: 0, delay });
+  if (!p) return;
+  voiceSrc = p.s;
+  voiceT = now + delay + p.s.buffer.duration + 1.2;
+  bus.amb.gain.cancelScheduledValues(now);
+  bus.amb.gain.setTargetAtTime(0.45, now + delay, 0.05);
+  bus.amb.gain.setTargetAtTime(1, now + delay + p.s.buffer.duration, 0.4);
 }
 
 export const sfx = {
   unlock: () => ctx(),
-  hit: (heavy, v = 1) => { tone(heavy ? 110 : 170, 40, heavy ? 0.22 : 0.12, 0.7 * v); noise(heavy ? 0.14 : 0.07, 0.6 * v, 'lowpass', heavy ? 2500 : 4000, 300); },
-  block: (v = 1) => { tone(900, 400, 0.06, 0.25 * v, 'square'); noise(0.06, 0.3 * v, 'highpass', 3000, 6000); },
-  parry: (v = 1) => { tone(1400, 2200, 0.25, 0.3 * v, 'triangle'); tone(2100, 2100, 0.35, 0.15 * v); },
-  guardBreak: (v = 1) => { tone(300, 60, 0.3, 0.5 * v, 'sawtooth'); noise(0.2, 0.4 * v, 'lowpass', 3000, 200); },
-  swing: (heavy, v = 1) => noise(heavy ? 0.2 : 0.1, 0.18 * v, 'bandpass', heavy ? 500 : 900, heavy ? 2000 : 3000, 2),
-  dash: (v = 1) => noise(0.2, 0.3 * v, 'bandpass', 300, 2600, 1.5),
-  jump: (v = 1) => tone(260, 520, 0.09, 0.12 * v, 'square'),
-  land: (v = 1) => tone(90, 40, 0.12, 0.35 * v),
-  slide: (v = 1) => noise(0.4, 0.2 * v, 'lowpass', 1500, 300),
-  ko: () => tone(400, 50, 0.9, 0.5, 'sawtooth'),
+  voice,
+  // soco = "tum" + estalo curto por cima; pesado ganha baque grave de corpo
+  hit: (heavy, v = 1) => {
+    if (heavy) { play('punch_h', v); play('body_h', 0.5 * v, { rate: 0.9 }); play('crack', 0.28 * v, { rate: 0.9 }); }
+    else { play('punch_l', 0.95 * v); play('crack', 0.32 * v, { rate: 1.1 }); }
+  },
+  block: (v = 1) => { play('block', 0.85 * v); play('body_m', 0.4 * v); },
+  parry: (v = 1) => { play('clang', v, { rate: 1.1 }); play('ding', 0.5 * v, { rate: 1.1 }); },
+  guardBreak: (v = 1) => { play('plate', v); play('break', 0.7 * v); play('punch_h', 0.7 * v); },
+  swing: (heavy, v = 1) => play(heavy ? 'swing_h' : 'swing_l', 0.6 * v, { rv: 0.1 }),
+  dash: (v = 1) => play('whoosh', 0.55 * v, { rate: 1.15, rv: 0.08 }),
+  jump: (v = 1) => { play('cloth', 0.4 * v, { rv: 0.1 }); play('step', 0.35 * v, { rate: 1.1 }); },
+  land: (v = 1) => { play('step', 0.8 * v, { rate: 0.9 }); if (v > 0.5) play('body_m', 0.5 * v); },
+  // vozes dos lutadores (female = Ladina): gemido ao apanhar, grito no golpe forte, dor no K.O.
+  grunt: (female, v = 1) => play(female ? 'grunt_f' : 'grunt_m', 0.7 * v, { rv: 0.06 }),
+  shout: (female, v = 1) => play(female ? 'grunt_f' : 'shout_m', 0.6 * v, { rv: 0.06, rate: female ? 1.12 : 1 }),
+  pain: (female, v = 1) => play(female ? 'pain_f' : 'pain_m', 0.85 * v, { rv: 0.03 }),
+  slide: (v = 1) => play('gravel', 0.65 * v, { rate: 1.1 }),
+  ko: () => { play('punch_h', 1); play('sub', 0.8); play('gong', 0.7); play('applause', 0.8, { rv: 0 }); },
+  applause: (v = 1) => play('applause', v, { rv: 0 }),
   // habilidades
-  boom: (v = 1) => { tone(90, 28, 0.6, 0.9 * v); noise(0.5, 0.7 * v, 'lowpass', 1200, 60); },
-  chime: (v = 1) => { tone(660, 1320, 0.25, 0.25 * v, 'triangle'); tone(990, 1980, 0.3, 0.15 * v); },
-  ding: (v = 1) => { tone(1500, 1480, 0.5, 0.25 * v, 'triangle'); tone(2250, 2240, 0.4, 0.12 * v); },
-  poof: (v = 1) => { noise(0.25, 0.4 * v, 'bandpass', 3000, 400, 1.2); tone(500, 120, 0.15, 0.15 * v); },
-  whistle: (dur, v = 1) => tone(1600, 260, dur, 0.16 * v),
-  explosion: (v = 1) => { noise(0.9, 0.9 * v, 'lowpass', 2500, 50); tone(70, 22, 0.8, 0.9 * v); },
-  slash: (v = 1) => noise(0.12, 0.35 * v, 'highpass', 2000, 7000, 1),
-  bell: () => { tone(880, 870, 1.2, 0.3, 'triangle'); tone(1320, 1310, 0.9, 0.15); },
+  boom: (v = 1) => { play('sub', v); play('cannon', 0.6 * v); play('debris', 0.6 * v); },
+  chime: (v = 1) => { play('magic', 0.55 * v, { rate: 1.2 }); play('shimmer', 0.3 * v); },
+  ding: (v = 1) => { play('ding', 0.8 * v); play('shimmer', 0.35 * v, { rate: 1.2 }); },
+  poof: (v = 1) => { play('magic', 0.5 * v, { rate: 1.8 }); play('swing_h', 0.5 * v, { rate: 0.7 }); },
+  // meteoro caindo: o ronco desce de tom e cresce até a hora do impacto
+  whistle: (dur, v = 1) => {
+    const p = play('rumble', 0.0001, { rv: 0 });
+    if (!p) return;
+    p.s.playbackRate.setValueAtTime(1.7, p.t);
+    p.s.playbackRate.linearRampToValueAtTime(0.55, p.t + dur);
+    p.g.gain.setValueAtTime(0.0001, p.t);
+    p.g.gain.exponentialRampToValueAtTime(0.5 * v, p.t + dur * 0.9);
+    p.g.gain.exponentialRampToValueAtTime(0.0001, p.t + dur + 0.08);
+    p.s.stop(p.t + dur + 0.1);
+  },
+  explosion: (v = 1) => { play('explosion', v); play('explosion_far', 0.8 * v); },
+  slash: (v = 1) => play('slash', 0.8 * v),
+  wall: (v = 1) => { play('punch_h', v, { rate: 0.85 }); play('plate', 0.7 * v, { rate: 0.8 }); play('debris', 0.6 * v); play('sub', 0.5 * v); },
+  bell: () => { play('bell', 0.8, { rv: 0 }); play('bell', 0.6, { rv: 0, delay: 0.32 }); }, // "ding ding" do boxe
+  // torcida de fundo (nível 0..1, segue a empolgação da luta) e vento do giro do furacão
+  ambience: (level) => { if (crowdG) crowdG.gain.setTargetAtTime(level, ac.currentTime, 0.4); },
+  wind: (level, rate = 1) => {
+    if (!windG) return;
+    windG.gain.setTargetAtTime(level, ac.currentTime, level > windG.gain.value ? 0.05 : 0.25);
+    windSrc.playbackRate.setTargetAtTime(rate, ac.currentTime, 0.1);
+  },
 };

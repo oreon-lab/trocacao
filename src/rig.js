@@ -18,6 +18,7 @@ export async function loadCharacters() {
   for (const gl of Object.values(GLTFS)) gl.animations.push(...extra.animations);
 }
 
+export const charClip = (name, clip) => GLTFS[name].animations.find(c => c.name === clip); // pra torcida (src/crowd.js)
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 
 // ---- quais animações do pacote fazem o quê
@@ -29,10 +30,12 @@ const CLIP = {
   ko: 'Death_A', cheer: 'Cheer',
   // habilidades: Ground_Slam, Shield_Charge e Meteor_Call feitas no Blender (tools/fp_anims.py); a facada dupla é do pacote
   slam: 'Ground_Slam', bash: 'Shield_Charge', stab: 'Dualwield_Melee_Attack_Stab', spell: 'Meteor_Call', dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',
+  // giro do furacão (tools/fp_anims.py): quem gira inclinado pra trás segurando; quem é girado com os braços pra cima
+  grabSpin: 'Grab_Spin', grabbed: 'Grabbed_Fly',
 };
 const BASE = ['idle', 'guard', 'run', 'back', 'left', 'right', 'air'];               // locomoção (soma 1)
-const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'slam', 'bash', 'stab', 'spell', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR'];
-const LOOPED = new Set(['block', 'cheer']);
+const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'slam', 'bash', 'stab', 'spell', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR', 'grabSpin', 'grabbed'];
+const LOOPED = new Set(['block', 'cheer', 'grabSpin', 'grabbed']);
 // 1ª pessoa: guarda e socos próprios (mãos enquadradas, socos no centro da mira)
 const FP_CLIP = { guard: 'FP_Guard', jabL: 'FP_JabL', jabR: 'FP_CrossR', block: 'FP_Block', blockHit: 'FP_Block' };
 // em 1ª pessoa só estes golpes/estados mexem nos braços; o resto fica na guarda (vista de dentro fica caótico)
@@ -74,6 +77,10 @@ const OUTLINE = skinOutline(0.022), OUTLINE_FP = skinOutline(0.006); // 1ª pess
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _axis = new THREE.Vector3();
 // gira um osso em torno de um eixo do MUNDO (independe dos eixos locais do rig)
+function rotateWorldQ(bone, q) {
+  bone.parent.getWorldQuaternion(_q2);
+  bone.quaternion.premultiply(_q2.clone().invert().multiply(q).multiply(_q2));
+}
 function rotateWorld(bone, axis, angle) {
   bone.parent.getWorldQuaternion(_q2);
   _q.setFromAxisAngle(axis, angle);
@@ -88,6 +95,7 @@ export class Rig {
     this.fp = firstPerson;
     this.root = new THREE.Group();
     this.pivot = new THREE.Group(); // yaw visual, inclinação e squash
+    this.pivot.rotation.order = 'YXZ'; // inclinação no eixo do próprio boneco (depois do yaw)
     this.root.add(this.pivot);
     const model = SU.clone(gl.scene);
     model.rotation.y = Math.PI; // o modelo olha pra +Z; o jogo usa -Z como frente
@@ -132,6 +140,7 @@ export class Rig {
     this.head = this.bone('head');
     model.updateMatrixWorld(true);
     this.eyeY = this.head.getWorldPosition(new THREE.Vector3()).y + 0.12; // altura dos olhos
+    this.armBones = ['lowerarml', 'lowerarmr', 'wristl', 'wristr'].map(n => [this.bone(n), this.bone(n).position.y]);
 
     // animações: base dividida em cima/baixo; golpes inteiros + só a parte de cima
     this.mixer = new THREE.AnimationMixer(model);
@@ -163,6 +172,31 @@ export class Rig {
   }
 
   set visible(v) { this.root.visible = v; }
+
+  // giro do furacão: as mãos de quem gira (this) e de quem é girado (other) se encontram no meio.
+  // Cada braço gira pra apontar pro ponto e estica o que faltar (braço de borracha). Roda depois do update dos dois.
+  linkHands(other) {
+    this.model.updateMatrixWorld(true);
+    other.model.updateMatrixWorld(true);
+    const hand = (r, s) => r.bone('hand' + s).getWorldPosition(new THREE.Vector3());
+    const bl = hand(other, 'l'), br = hand(other, 'r'), jobs = [];
+    for (const s of ['l', 'r']) {
+      const a = hand(this, s), os = a.distanceTo(bl) < a.distanceTo(br) ? 'l' : 'r'; // a mão do outro do mesmo lado
+      const mid = a.clone().lerp(os === 'l' ? bl : br, 0.5);
+      jobs.push([this, s, mid], [other, os, mid]);
+    }
+    for (const [r, s, t] of jobs) r.aimArm(s, t);
+  }
+  aimArm(s, target) {
+    const up = this.bone('upperarm' + s), sh = up.getWorldPosition(new THREE.Vector3());
+    const v1 = this.bone('hand' + s).getWorldPosition(new THREE.Vector3()).sub(sh), v2 = target.clone().sub(sh);
+    const l1 = v1.length(), l2 = v2.length();
+    if (l1 < 1e-4 || l2 < 1e-4) return;
+    rotateWorldQ(up, _q.setFromUnitVectors(v1.divideScalar(l1), v2.divideScalar(l2)));
+    const k = clamp(l2 / l1, 0.7, T.maxArmStretch);
+    for (const n of ['lowerarm' + s, 'wrist' + s]) this.bone(n).position.y *= k;
+    up.updateMatrixWorld(true);
+  }
 
   // dispara um golpe/reação do começo, acelerado pra bater junto com o jogo
   start(key, a) {
@@ -200,6 +234,11 @@ export class Rig {
       if (combat || f.ko || f.dashT > 0) face = f.yaw; // esquivas são relativas à frente
       else if (hs > 0.6) face = Math.atan2(-f.vel.x, -f.vel.z);
       this.vyaw += wrap(face - this.vyaw) * (1 - Math.exp(-(a ? 30 : 12) * dt));
+      // giro do furacão: quem gira olha pra vítima; a vítima (e o arremessado no ar) fica deitada com a cabeça pro centro
+      if (f.grab) this.vyaw = f.grab.ang;
+      // (de barriga pra baixo: a frente aponta pro centro e o boneco tomba pra frente)
+      else if (f.heldBy?.grab) this.vyaw = f.heldBy.grab.ang + Math.PI;
+      else if (f.thrown && !f.grounded) this.vyaw = Math.atan2(f.vel.x, f.vel.z);
       this.pivot.rotation.y = this.vyaw;
     }
     if (dt <= 0) return;
@@ -235,7 +274,10 @@ export class Rig {
 
     // ---- camada de cima: golpe, defesa, esquiva, reação, KO, comemoração
     let key = null, id = null, upper = 0;
-    if (f.ko) key = 'ko';
+    const flying = !this.fp && !f.ko && (!!f.heldBy || (!!f.thrown && !f.grounded));
+    if (f.grab) key = 'grabSpin';
+    else if (flying) key = 'grabbed';
+    else if (f.ko) key = 'ko';
     else if (foe?.ko) key = 'cheer';
     else if (f.stunT > 0) { key = this.hitKey; id = this.hitN; }
     else if (a) {
@@ -274,6 +316,12 @@ export class Rig {
       this.over[k].up.setEffectiveWeight(this.ow[k] * this.ou[k]);
     }
     this.mixer.update(dt);
+    // braço de borracha no giro do furacão: afasta cotovelo e pulso ao longo do osso
+    this.stretch = damp(this.stretch || 1, f.grab ? T.grabArmStretch : flying ? T.heldArmStretch : 1, 18, dt);
+    if (this.stretch > 1.001 || this.stretched) {
+      for (const [b, y] of this.armBones) b.position.y = y * this.stretch;
+      this.stretched = this.stretch > 1.001;
+    }
 
     // ---- ajustes por cima da animação
     // olhar pra cima/baixo junto com a mira (em combate; na 1ª pessoa a câmera já faz isso)
@@ -289,7 +337,8 @@ export class Rig {
     this.lean = damp(this.lean, f.sliding ? 0.45 : 0, 14, dt);
     if (!this.fp) {
       this.pivot.scale.set(1 / Math.sqrt(this.sq), this.sq, 1 / Math.sqrt(this.sq));
-      this.pivot.rotation.x = this.lean;
+      this.fly = damp(this.fly || 0, flying ? 1 : 0, flying ? 30 : 9, dt); // deitado de barriga pra baixo, cabeça pro centro do giro
+      this.pivot.rotation.x = this.lean - this.fly * Math.PI / 2;
     }
 
     // Passo Sombrio: some na fumaça até reaparecer atrás do oponente
@@ -302,9 +351,9 @@ export class Rig {
     const tk = a ? a.kind : tell?.kind;
     const hand = a ? a.hand : tk === 'light' ? f.hand ^ 1 : 1;
     const charging = !!tell || (a && a.phase === 'windup' && a.kind !== 'sweep');
-    const theme = SPECIALS[this.name]?.color ?? 0xb06bff; // habilidade e super brilham na cor do lutador
-    this.glowMat.color.set(tk === 'super' || a?.def.special ? theme : tk === 'heavy' ? 0xff4b3e : 0xffd23f);
+    const theme = SPECIALS[this.name]?.color ?? 0xb06bff; // habilidade, super e agarrão brilham na cor do lutador
+    this.glowMat.color.set(tk === 'super' || tk === 'grab' || a?.def.special ? theme : tk === 'heavy' ? 0xff4b3e : 0xffd23f);
     this.glowMat.opacity = damp(this.glowMat.opacity, charging ? 0.5 + 0.25 * Math.sin(performance.now() * 0.04) : 0, 30, dt);
-    this.glows.forEach((g, i) => (g.visible = this.glowMat.opacity > 0.02 && i === hand));
+    this.glows.forEach((g, i) => (g.visible = this.glowMat.opacity > 0.02 && (tk === 'grab' || i === hand))); // agarrão: as duas mãos
   }
 }

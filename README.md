@@ -14,10 +14,14 @@ Abra http://localhost:5173. O mesmo servidor entrega o jogo e faz o multiplayer 
 
 ## Mecânicas
 
-- **E** — esquiva. Quando um golpe vem, aparece um "E" na tela; se apertar quando ele fica **verde**, é ESQUIVA PERFEITA: câmera lenta, invencível, e o próximo golpe é um contra-ataque (x1.5).
+- **Q** — esquiva. Quando um golpe vem, aparece um "Q" na tela; se apertar quando ele fica **verde**, é ESQUIVA PERFEITA: câmera lenta, invencível, e o próximo golpe é um contra-ataque (x1.5).
 - **F** — defesa (apertar bem na hora do golpe = parry).
+- **Movimentação:** pulo duplo (devolve o dash do ar); dash pra frente + segurar W = corrida (soco na corrida = soco voador; 30% de chance de CRÍTICO: x1.8 de dano e empurrão x2.2); dash contra borda/pilar = ricochete; slide passa por baixo de socos.
+- **Combos:** depois que o golpe acerta, dash/esquiva cancelam o resto. Pesado arremessa; dash pra frente persegue; golpe no ar levanta de novo; arremessado na parede fica tonto. Acertar recarrega o dash mais rápido, defender mais devagar.
+- **G — Giro do Furacão:** colado no oponente, agarra pelas mãos (gasta 70 de energia e tem 10s de recarga; errou, não gasta), gira ~3 voltas num furacão de vento e arremessa pra onde a câmera aponta (passa pela defesa; na parede = dano extra). Poses `Grab_Spin`/`Grabbed_Fly` no `tools/fp_anims.py`; no jogo os braços se esticam até as mãos se encontrarem (`Rig.linkHands`). Desligado no online.
+- **Arena fecha** depois de 25s de luta (parede vermelha), até raio 10.5.
 - **Energia** (barra embaixo da vida): enche batendo, apanhando, defendendo, com parry e esquiva perfeita.
-- **Q** — habilidade do seu lutador (35). **R** — super soco voador na cor do lutador (barra cheia, quebra defesa).
+- **E** — habilidade do seu lutador (35). **R** — super soco voador na cor do lutador (barra cheia, quebra defesa).
   - **Bárbaro — Terremoto:** pula e soca o chão; a onda (espetos de pedra, rachaduras) derruba quem está perto. Pule pra escapar.
   - **Cavaleiro — Investida Sagrada:** avança com um escudo de luz que segura golpes de frente.
   - **Ladina — Passo Sombrio:** some na fumaça e aparece atrás do oponente com uma facada.
@@ -48,8 +52,13 @@ Como sincroniza: cada um simula o próprio lutador (zero atraso no seu movimento
 | `assets/kaykit/extra_anims.glb` | Animações feitas no Blender pro rig KayKit: guarda/jab/direto de 1ª pessoa, uppercut (pesado) e as habilidades (Ground_Slam, Shield_Charge, Meteor_Call) |
 | `tools/fp_anims.py` | Gera o `extra_anims.glb`: `blender -b --factory-startup --python tools/fp_anims.py` (IK nas mãos sobre a Unarmed_Idle, assado quadro a quadro; imprime onde as mãos caem na tela) |
 | `check.html` | Folha de poses de cada personagem + checagem de pés/altura (`?c=Knight`) |
-| `src/arena.js` | Cenário + colisão com borda/pilares |
-| `src/fx.js` | Partículas, estrelas de impacto, rastro do dash, sons sintetizados |
+| `src/arena.js` | **Arena do Castelo**: coliseu de pedra (piso, mureta, pilares com tocha, arquibancada, muro com portões, estandartes e torres) numa vila medieval com castelo, morros e montanhas + colisão com borda/pilares |
+| `src/crowd.js` | Torcida: os personagens KayKit são fotografados no carregamento em vários quadros da comemoração/espera ("impostores"); cada torcedor é um cartaz que vira pra câmera e anima no shader (~400 torcedores = 800 triângulos) |
+| `assets/env/` | Modelos do cenário — KayKit Dungeon Remastered e Medieval Hexagon (Kay Lousberg, CC0). Baixar de novo: `python tools/get_env.py` |
+| `env_check.html` | Folha dos modelos do cenário com o tamanho de cada um (`?set=dungeon` / `?set=hex`) |
+| `assets/sfx/` | Sons de verdade (CC0, OpenGameArt): socos, defesa, swishes, locutor, torcida, vento... Fontes e autores em `assets/sfx/CREDITS.txt` |
+| `tools/sfx_build.py` | Monta `assets/sfx/` dos pacotes baixados: corta o silêncio do começo (impacto sai na hora), normaliza e converte pra .ogg |
+| `src/fx.js` | Partículas, estrelas de impacto, furacão, rastro do dash e o tocador de som (variações aleatórias, locutor, torcida que segue a empolgação) |
 | `src/toon.js` | Material toon + contorno preto |
 | `src/main.js` | Loop, rounds, câmera (shake, FOV, inclinação), HUD, modo online |
 | `src/net.js` | Cliente da sala: estado do lutador, interpolação do oponente |

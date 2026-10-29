@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { T, ATTACKS, SPECIALS } from './config.js';
-import { Fighter, events, damp, clamp } from './fighter.js';
+import { Fighter, events, damp, clamp, critDef } from './fighter.js';
 import { Rig, loadCharacters, CHARACTERS } from './rig.js';
 import { createArena } from './arena.js';
 import { PlayerInput, keyName } from './input.js';
@@ -35,7 +35,8 @@ scene.add(sun);
 const arena = createArena(scene);
 const player = new Fighter('VOCÊ', 0x3fa7ff);
 const enemy = new Fighter('BOT', 0xff5a4f);
-await loadCharacters();
+await Promise.all([loadCharacters(), arena.ready]); // personagens + modelos do cenário
+arena.buildCrowd(renderer, camera); // torcida = fotos dos personagens KayKit (src/crowd.js)
 let pRig, eRig;
 // 1ª pessoa: cópia do seu personagem presa na câmera (olhos = câmera), só com os braços.
 // As animações FP_* (feitas no Blender) já enquadram as mãos, então não precisa de truque.
@@ -51,6 +52,10 @@ const settings = structuredClone(DEFAULT_SETTINGS);
 try {
   const saved = JSON.parse(localStorage.getItem('trocacao') || '{}');
   Object.assign(settings, saved, { binds: { ...settings.binds, ...saved.binds } }); // ação nova ganha a tecla padrão
+  const b = settings.binds; // esquiva saiu do E pro Q (habilidade foi pro E): troca quem ainda usa o padrão antigo
+  if (b.dodge[0] === 'KeyE' && b.q[0] === 'KeyQ') [b.dodge[0], b.q[0]] = ['KeyQ', 'KeyE'];
+  // ação nova (giro do furacão no G): se o G já está em outra coisa, fica sem tecla
+  if (!saved.binds?.grab && Object.keys(b).some(a => a !== 'grab' && b[a].includes('KeyG'))) b.grab = ['', ''];
 } catch {}
 const save = () => { try { localStorage.setItem('trocacao', JSON.stringify(settings)); } catch {} };
 const HP = { short: 100, normal: 160, long: 220 };
@@ -65,7 +70,7 @@ function applySettings(k) {
   fx.density = settings.particles;
   $('fps').classList.toggle('hidden', !settings.showFps);
   // HUD mostra as teclas configuradas
-  for (const [id, a] of [['dodgeKey', 'dodge'], ['skQk', 'q'], ['skRk', 'r']]) {
+  for (const [id, a] of [['dodgeKey', 'dodge'], ['skQk', 'q'], ['skRk', 'r'], ['skGk', 'grab']]) {
     const name = keyName(settings.binds[a].find(Boolean));
     $(id).textContent = name;
     $(id).style.fontSize = name.length > 2 ? '15px' : '';
@@ -140,7 +145,7 @@ const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const _lk = new THREE.Vector3();
 function lockOnCamera(dt) {
   if (S.lockOn && !canLock() && S.state !== 'intro') S.lockOn = false;
-  if (!S.lockOn) return;
+  if (!S.lockOn || player.grab || player.heldBy) return; // no giro do furacão a câmera fica livre (mira do arremesso)
   // mira no peito do oponente a partir da câmera (em 3ª pessoa ela fica no ombro)
   _lk.set(enemy.pos.x - camera.position.x, enemy.pos.y + enemy.height * 0.6 - camera.position.y, enemy.pos.z - camera.position.z);
   const yawT = Math.atan2(-_lk.x, -_lk.z), pitchT = Math.atan2(_lk.y, Math.hypot(_lk.x, _lk.z)) - (S.tps ? 0.08 : 0);
@@ -221,7 +226,7 @@ function goOffline(msg) {
   menu.setOnline(msg || '', false);
   if (msg) menu.show('online');
 }
-enemy.onRemoteHit = (kind, point, mul) => net?.send({ t: 'hit', kind, mul });
+enemy.onRemoteHit = (kind, point, mul, crit) => net?.send({ t: 'hit', kind, mul, crit });
 const NET = {
   joined: m => { S.host = m.host; netStatus(m.host ? `Sala ${m.room}: esperando o oponente... manda o código pro seu amigo.` : `Entrando na sala ${m.room}...`); },
   full: () => goOffline('Essa sala já tem 2 jogadores.'),
@@ -246,11 +251,12 @@ const NET = {
     let def = ATTACKS[m.kind];
     if (!def || player.ko || player.invuln) return;
     if (m.mul > 1) def = { ...def, dmg: def.dmg * m.mul, knock: def.knock * 1.3 };
+    if (m.crit) def = critDef(def);
     const att = m.pos ? { pos: new THREE.Vector3(...m.pos), vel: new THREE.Vector3(), stunT: 0, atk: null } : enemy;
     const res = player.receive(att, def);
     const point = new THREE.Vector3(player.pos.x, player.pos.y + player.height * 0.65, player.pos.z);
-    events.push({ type: res, f: enemy, victim: player, kind: m.kind, point, dmg: Math.round(def.dmg), combo: player.comboN, counter: m.mul > 1 });
-    net.send({ t: 'res', res, kind: m.kind, p: point.toArray(), combo: player.comboN });
+    events.push({ type: res, f: enemy, victim: player, kind: m.kind, point, dmg: Math.round(def.dmg), combo: player.comboN, counter: m.mul > 1, crit: m.crit });
+    net.send({ t: 'res', res, kind: m.kind, p: point.toArray(), combo: player.comboN, crit: m.crit, dmg: Math.round(def.dmg) });
   },
   res: m => { // resultado do meu golpe
     const def = ATTACKS[m.kind];
@@ -262,7 +268,7 @@ const NET = {
       player.vel.z = (nz / l) * 8;
     }
     player.gain(m.res === 'hit' ? 7 : m.res === 'break' ? 6 : m.res === 'block' ? 2 : 0);
-    events.push({ type: m.res, f: player, victim: enemy, kind: m.kind, point: new THREE.Vector3(...m.p), dmg: def.dmg, combo: m.combo });
+    events.push({ type: m.res, f: player, victim: enemy, kind: m.kind, point: new THREE.Vector3(...m.p), dmg: m.dmg ?? def.dmg, combo: m.combo, crit: m.crit });
   },
   fire: m => spawnMeteor(enemy, m), // meteoro do oponente (só visual; quem acerta é decidido por ele)
   left: () => goOffline('O oponente saiu.'),
@@ -294,9 +300,12 @@ function startRound() {
   bot.reset(Math.PI);
   remote.buf.length = 0;
   clearHazards();
-  Object.assign(S, { lockOn: false, state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
+  arena.setRadius(T.arenaRadius);
+  Object.assign(S, { closing: false, lockOn: false, state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
   banner(`ROUND ${S.round}`);
   sfx.bell();
+  const last = S.wins[0] === winsNeeded() - 1 && S.wins[1] === winsNeeded() - 1; // quem ganhar leva a luta
+  sfx.voice(last && S.round > 1 ? 'final_round' : `round_${Math.min(S.round, 5)}`, { force: true, delay: 0.45 });
   updatePips();
   if (S.online && S.host) net.send({ t: 'round', round: S.round, wins: S.wins });
 }
@@ -308,12 +317,20 @@ function endRound(winner, text, force) {
   Object.assign(S, { state: 'ko', stateT: 0 });
   banner(text, 'big');
   sfx.ko();
+  const won = winner === 0 ? player : winner === 1 ? enemy : null;
+  sfx.voice(winner < 0 ? 'tie' : text === 'TEMPO!' ? 'time' : won.hp >= T.hp ? 'flawless_victory' : 'winner', { force: true, delay: 0.5 });
   updatePips();
 }
 function updateState(dt) {
   S.stateT += dt;
-  if (S.state === 'intro' && S.stateT > 1.3) { S.state = 'fight'; S.stateT = 0; banner('LUTE!'); }
-  if (S.state === 'fight' && S.online && enemy.ko) endRound(0, 'K.O.!'); // host vê o K.O. do convidado pelo estado dele
+  if (S.state === 'intro' && S.stateT > 1.3) { S.state = 'fight'; S.stateT = 0; banner('LUTE!'); sfx.voice('fight', { force: true }); }
+  if (S.state === 'fight' && S.online && enemy.ko) endRound(0, 'K.O.!');
+  // arena fecha com o tempo de luta: ninguém fica parado longe do outro
+  if (S.state === 'fight') {
+    const u = clamp((S.stateT - T.shrinkStart) / T.shrinkTime, 0, 1);
+    if (u > 0 && !S.closing) { S.closing = true; banner('A ARENA ESTÁ FECHANDO!'); sfx.bell(); }
+    arena.setRadius(T.arenaRadius + (T.arenaMin - T.arenaRadius) * u * (2 - u), S.stateT); // desacelera no fim
+  } // host vê o K.O. do convidado pelo estado dele
   if (S.state === 'fight' && (!S.online || S.host) && (S.timer -= dt) <= 0) {
     S.timer = 0;
     endRound(player.hp === enemy.hp ? -1 : player.hp > enemy.hp ? 0 : 1, 'TEMPO!');
@@ -323,6 +340,7 @@ function updateState(dt) {
     if (S.stateT > 3.2) {
       if (Math.max(...S.wins) >= winsNeeded()) {
         S.state = 'over';
+        sfx.voice(S.wins[0] > S.wins[1] ? 'you_win' : 'you_lose', { force: true });
         document.exitPointerLock();
         showOver();
       } else if (!S.online || S.host) { S.round++; startRound(); } // convidado espera o 'round' do host
@@ -392,7 +410,10 @@ function updateHUD(dt) {
   $('eMeterBox').classList.toggle('full', enemy.meter >= T.costR);
   $('skQ').classList.toggle('ready', player.meter >= T.costQ);
   $('skR').classList.toggle('ready', player.meter >= T.costR);
-  // aviso do E: aparece quando um golpe vem; verde = agora é esquiva perfeita
+  $('skG').classList.toggle('ready', player.meter >= T.costG && player.grabCd <= 0);
+  const gTxt = player.grabCd > 0 ? `${Math.ceil(player.grabCd)}s` : `GIRO ${T.costG}`; // recarga do giro do furacão
+  if (gTxt !== S.gTxt) $('skGtxt').textContent = S.gTxt = gTxt;
+  // aviso da esquiva: aparece quando um golpe vem; verde = agora é esquiva perfeita
   const th = threat(), now = S.state === 'fight' && player.perfectWindow(enemy);
   $('dodgeKey').classList.toggle('show', settings.dodgeHint && (now || (!!th && th.k > 0.3) || player.incoming > 0));
   $('dodgeKey').classList.toggle('now', now);
@@ -404,7 +425,7 @@ function updateHUD(dt) {
   });
   const hs = Math.hypot(player.vel.x, player.vel.z);
   const sp = player.dashT > 0 ? 1 : player.sliding ? 0.6 : clamp((hs - 9) / 8, 0, 0.6);
-  hud.speed.style.opacity = S.tps ? sp * 0.5 : sp;
+  hud.speed.style.opacity = S.view3 ? sp * 0.5 : sp;
   hud.speed.style.transform = `rotate(${Math.random() * 360}deg) scale(1.3)`;
   hud.hurt.style.opacity = Math.max(0, +hud.hurt.style.opacity - dt * 3);
   hud.cross.classList.toggle('hot', player.reach(enemy, ATTACKS.light) <= 0 && !enemy.ko);
@@ -432,7 +453,7 @@ const WARN = {
 };
 function threat() {
   const e = enemy, p = player;
-  if (S.state !== 'fight' || e.ko || p.ko) return null;
+  if (S.state !== 'fight' || e.ko || p.ko || p.heldBy || e.grab) return null; // preso no giro: não tem o que desviar
   const dx = p.pos.x - e.pos.x, dz = p.pos.z - e.pos.z, d = Math.hypot(dx, dz);
   if (p.danger) return { kind: 'meteorHit', k: p.incoming > 0 ? 1 : 0.6 };
   if (e.tell) return { kind: e.tell.kind, k: Math.min(1, e.tell.el / e.tell.total) };
@@ -614,10 +635,26 @@ function watchAttacks(sim) {
       }
     }
   }
+  for (const f of [player, enemy]) {
+    if (f.grab && !f.tornado) f.tornado = fx.tornado(theme(f));
+    if (f.tornado) {
+      if (f.grab) {
+        fx.tornadoUpdate(f.tornado, f, sim);
+        const half = Math.floor(f.grab.turns * 2); // "vush" a cada meia volta
+        if (half !== f.whoosh) { f.whoosh = half; sfx.swing(true, vol(f) * (0.6 + 0.4 * Math.min(1, f.grab.t / T.spinTime))); }
+      } else { fx.tornadoOff(f.tornado); f.tornado = null; }
+    }
+    if (sim > 0 && f.thrown && !f.grounded && (f.trailT = (f.trailT || 0) - sim) <= 0) {
+      f.trailT = 0.018;
+      fx.puff(new THREE.Vector3(f.pos.x, f.pos.y + 0.2, f.pos.z), 0xffffff, 0.9, 0.3);
+      fx.puff(new THREE.Vector3(f.pos.x, f.pos.y + 0.2, f.pos.z), theme(f.thrown), 0.5, 0.25);
+    }
+  }
   document.body.classList.toggle('charging', player.atk?.kind === 'super' && player.atk.phase === 'windup');
 }
 
 // ---------- eventos de gameplay -> juice ----------
+const clock = () => performance.now() / 1000;
 function vol(f) { return f === player ? 1 : clamp(1 - player.pos.distanceTo(f.pos) / 35, 0.2, 1); }
 function handleEvents() {
   for (const e of events) {
@@ -631,9 +668,21 @@ function handleEvents() {
         if (sup) { fx.explode(e.point, col, true); fx.groundRing(e.victim.pos, col, 6, 0.6); flashScreen(mine ? 0.6 : 0.4, '#fff'); }
         abilityHit(e, col);
         sfx.hit(heavy, mine ? 1 : 0.85);
+        // quem apanha geme (sempre no pesado, às vezes no rápido); o K.O. tem grito de dor
+        if (e.victim.ko) sfx.pain(e.victim.char === 'Rogue', vol(e.victim));
+        else if ((heavy || e.combo >= 3 ? 0.75 : 0.25) > Math.random() && clock() - (e.victim.gruntT || 0) > 0.35) { e.victim.gruntT = clock(); sfx.grunt(e.victim.char === 'Rogue', vol(e.victim)); }
         if (settings.dmgNumbers) popText(e.point, e.dmg, heavy ? 'big' : '');
+        if (e.crit) {
+          popText(e.point.clone().setY(e.point.y + 0.9), 'CRÍTICO!', 'big orange');
+          S.hitstop = Math.max(S.hitstop, 0.16);
+          fx.explode(e.point, 0xff8a3d, false);
+          flashScreen(mine ? 0.45 : 0.25, '#ffb070');
+          S.trauma = Math.min(1, S.trauma + 0.4);
+          arena.hype(0.8);
+        }
         if (e.counter) popText(e.point.clone().setY(e.point.y + 0.7), 'CONTRA-ATAQUE!', 'big cyan');
         if (e.combo >= 2) popText(e.point.clone().setY(e.point.y + 0.5), `${e.combo} HITS!`, 'small combo');
+        if (e.f === player && (e.combo >= T.comboMax || sup)) sfx.voice(sup ? 'excellent' : 'combo');
         S.trauma = Math.min(1, S.trauma + (mine ? (sup ? 1 : heavy ? 0.75 : 0.4) : sup ? 0.6 : heavy ? 0.3 : 0.12));
         // tranco de câmera: quem apanha é jogado pra trás/lado; quem bate sente o impacto + zoom
         if (mine) { camKick(0.05 * (heavy ? 2 : 1), (Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.08); hud.hurt.style.opacity = heavy ? 0.8 : 0.45; }
@@ -645,6 +694,7 @@ function handleEvents() {
         sfx.parry(v);
         fx.ring(e.f.pos.clone().setY(1), 0x5dff7a, 2.5);
         popText(e.f.pos.clone().setY(e.f.pos.y + 2), e.f === player ? 'ESQUIVA PERFEITA!' : 'ESQUIVOU!', 'big cyan');
+        if (e.f === player) sfx.voice('perfect');
         if (e.f === player) { if (!S.online) S.slowT = 0.55; camZoom(6); }
         break;
       case 'fire': spawnMeteor(e.f); break;
@@ -676,6 +726,7 @@ function handleEvents() {
         S.hitstop = 0.16;
         fx.starBurst(e.point, 1, 0x7fffe8);
         popText(e.point, 'PARRY!', 'big cyan');
+        if (e.victim === player) sfx.voice('denied');
         S.trauma = Math.min(1, S.trauma + 0.3);
         if (e.victim === player) camZoom(5);
         arena.hype(0.6);
@@ -690,8 +741,61 @@ function handleEvents() {
         if (mine) hud.hurt.style.opacity = 0.6;
         break;
       case 'dash': sfx.dash(v); fx.dust(e.f.pos, 4); break;
-      case 'swing': sfx.swing(e.kind !== 'light', v); break;
-      case 'jump': sfx.jump(v); break;
+      case 'chase': popText(e.f.pos.clone().setY(e.f.pos.y + 2), 'PERSEGUIÇÃO!', 'small combo'); if (e.f === player) camZoom(-5); break;
+      case 'bounce': // ricochete na parede durante o dash
+        sfx.block(v); fx.burst(e.point, 0x7fd8ff, 10, 6); fx.ring(e.point, 0x7fd8ff, 1.6);
+        popText(e.point, 'RICOCHETE!', 'small cyan');
+        S.trauma = Math.min(1, S.trauma + (e.f === player ? 0.25 : 0.08));
+        break;
+      case 'splat': // arremessado bateu na parede
+        sfx.wall(v); fx.starBurst(e.point, 0.9, 0xff8a3d); fx.dust(e.f.pos, 8);
+        popText(e.point, e.big ? 'NA PAREDE!!' : 'PAREDE!', 'big orange');
+        S.hitstop = Math.max(S.hitstop, e.big ? 0.16 : 0.08);
+        if (e.big) { // arremesso do furacão: impacto bem maior
+          fx.explode(e.point, 0xffd23f, true);
+          fx.rays(e.point, 0xffffff, 16, 3, 0.35);
+          fx.rocks(e.point, 10, 7);
+          sfx.boom(v);
+          sfx.applause(0.6);
+          if (!mine) sfx.voice('impressive'); // você arremessou o oponente na parede
+          flashScreen(mine ? 0.5 : 0.3, '#fff');
+          if (settings.dmgNumbers) popText(e.point.clone().setY(e.point.y + 0.7), e.dmg, 'big');
+          S.trauma = Math.min(1, S.trauma + 0.5);
+          arena.hype(1);
+        }
+        S.trauma = Math.min(1, S.trauma + (mine ? 0.6 : 0.3));
+        arena.hype(0.5);
+        break;
+      case 'grab': // agarrou: congela um instante, flash e o nome do golpe
+        S.hitstop = Math.max(S.hitstop, 0.09);
+        sfx.block(v); sfx.chime(v * 0.7);
+        fx.flash(e.point, 0xffffff, 2.2);
+        fx.ring(e.point, theme(e.f), 2.2);
+        popText(e.f.pos.clone().setY(e.f.pos.y + 2.4), 'GIRO DO FURACÃO!', 'big', theme(e.f));
+        S.trauma = Math.min(1, S.trauma + 0.2);
+        if (e.f === player || mine) camZoom(-6);
+        arena.hype(0.7);
+        break;
+      case 'throw': { // soltou: vush forte, anel de vento na direção do arremesso
+        const col = theme(e.f);
+        sfx.dash(v); sfx.swing(true, v);
+        fx.rays(e.from, 0xffffff, 14, 2.6, 0.3);
+        fx.ring(e.from, col, 3);
+        fx.burst(e.from, 0xffffff, 14, 10);
+        if (settings.dmgNumbers) popText(e.point.clone().setY(e.point.y + 0.6), e.dmg, 'big');
+        popText(e.f.pos.clone().setY(e.f.pos.y + 2.2), 'ARREMESSO!', 'big orange');
+        S.hitstop = Math.max(S.hitstop, 0.06);
+        S.trauma = Math.min(1, S.trauma + (mine ? 0.5 : 0.3));
+        if (mine) { hud.hurt.style.opacity = 0.6; camKick(0.08, 0, (Math.random() - 0.5) * 0.1); }
+        arena.hype(0.8);
+        break;
+      }
+      case 'under': popText(e.point, 'POR BAIXO!', 'small cyan'); sfx.slide(v); break;
+      case 'swing':
+        sfx.swing(e.kind !== 'light', v);
+        if (e.kind === 'super' || ((e.kind === 'heavy' || ATTACKS[e.kind]?.special) && Math.random() < 0.5)) sfx.shout(e.f.char === 'Rogue', v); // grito no golpe forte
+        break;
+      case 'jump': sfx.jump(v); if (e.double) { fx.ring(e.f.pos.clone(), 0xffffff, 1.2); fx.dust(e.f.pos, 3); } break;
       case 'slide': sfx.slide(v); break;
       case 'land':
         if (e.v > 6) { sfx.land(v * Math.min(1, e.v / 14)); fx.dust(e.f.pos, 5); }
@@ -723,6 +827,7 @@ const viewDir = out => { const cp = Math.cos(input.pitch); return out.set(-Math.
 // que a CRUZ está mirando (senão passa ~0.8m ao lado). Ajuda leve: se a cruz passa a até 1m do peito do
 // oponente, mira no peito. Mais longe que isso, mira no ponto da cruz mesmo (sem vantagem extra).
 function tpsAim() {
+  if (player.grab) { player.input.yaw = input.yaw; player.input.pitch = input.pitch; return; } // girando: solta pra onde a câmera olha
   viewDir(_dir);
   _chest.set(enemy.pos.x, enemy.pos.y + enemy.height * 0.6, enemy.pos.z);
   const t = _aim.subVectors(_chest, camera.position).dot(_dir);
@@ -743,7 +848,7 @@ function updateCamera(dt, now) {
   let eyeY = f.eyeY;
   if (f.ko) { rollT = 0.5; eyeY = 0.4; }
   S.roll = damp(S.roll, rollT, 10, dt);
-  const fovT = settings.fov + Math.max(0, hs - T.walkSpeed) * 0.9 + (f.dashT > 0 ? 8 : 0) + (f.sliding ? 6 : 0);
+  const fovT = settings.fov + (f.grab || f.heldBy ? 0 : Math.max(0, hs - T.walkSpeed) * 0.9) + (f.dashT > 0 ? 8 : 0) + (f.sliding ? 6 : 0) + (f.grab ? 8 : 0);
   S.fov = damp(S.fov, fovT, 8, dt);
   springs(dt);
   camera.fov = S.fov + S.kz;
@@ -757,19 +862,31 @@ function updateCamera(dt, now) {
   const n = (a, b, c) => Math.sin(t * a) * 0.5 + Math.sin(t * b + 1.7) * 0.3 + Math.sin(t * c + 4.1) * 0.2;
   const shX = n(23, 41, 67) * 0.045 * sh + S.ky, shY = n(29, 37, 71) * 0.04 * sh + S.kp, shR = n(17, 31, 53) * 0.05 * sh + S.kr;
 
-  camera.position.set(f.pos.x, eyeY + S.dip + bob * (S.tps ? 0.3 : 1), f.pos.z);
-  if (S.tps) {
+  // girado: a câmera fica em quem gira (senão roda junto e enjoa)
+  const anchor = f.heldBy || f, cine = !!(f.grab || f.heldBy);
+  if (f.heldBy) eyeY = 1.7;
+  camera.position.set(anchor.pos.x, eyeY + S.dip + bob * (S.view3 ? 0.3 : 1), anchor.pos.z);
+  if (S.view3) {
     // por cima do ombro: personagem no terço esquerdo, centro livre pro oponente e pra cruz.
     // Recua até 3.2m, mas encurta se bater na borda ou num pilar.
     viewDir(_dir);
     const ex = camera.position.x + c * 1.0, ez = camera.position.z - s * 1.0, ey = camera.position.y + 0.35;
     const blocked = (x, z) => Math.hypot(x, z) > arena.R - 0.4 || arena.pillars.some(p => Math.hypot(x - p.x, z - p.z) < p.r + 0.3);
-    let d = 3.2;
+    let d = f.thrown && !f.grounded ? 4.2 : 3.2;
     while (d > 0.8 && blocked(ex - _dir.x * d, ez - _dir.z * d)) d -= 0.1;
     S.camDist = S.camDist ? Math.min(d, damp(S.camDist, d, 6, dt)) : d; // aproxima na hora, afasta suave
     camera.position.set(ex - _dir.x * S.camDist, Math.max(0.35, ey - _dir.y * S.camDist), ez - _dir.z * S.camDist);
   }
-  camera.rotation.set(input.pitch + shY, input.yaw + shX, S.roll + shR);
+  // giro do furacão: câmera sobe e olha de cima pro furacão inteiro; o mouse continua girando (= pra onde vai arremessar)
+  S.cineK = damp(S.cineK || 0, cine ? 1 : 0, cine ? 5 : 3, dt);
+  let pitch = input.pitch;
+  if (S.cineK > 0.001) {
+    const k = S.cineK;
+    _aim.set(anchor.pos.x + s * T.cineDist, T.cineHeight, anchor.pos.z + c * T.cineDist);
+    camera.position.lerp(_aim, k);
+    pitch += (T.cinePitch - pitch) * k;
+  }
+  camera.rotation.set(pitch + shY, input.yaw + shX, S.roll + shR);
 }
 
 // ---------- loop ----------
@@ -784,7 +901,7 @@ player.reset(new THREE.Vector3(0, 0, 7), 0);
 enemy.reset(new THREE.Vector3(0, 0, -7), Math.PI);
 
 // ?debug no endereço expõe o estado pra testes no console
-if (location.search.includes('debug')) window.game = { S, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
+if (location.search.includes('debug')) window.game = { renderer, S, arena, bot, startMatch, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
 
 // resolução adaptativa: se o frame passa de ~20ms por um tempo, baixa a resolução interna; se sobra, sobe
 const maxPR = () => Math.min(devicePixelRatio, 2) * settings.resScale;
@@ -801,12 +918,12 @@ function adaptRes(dt) {
 
 let last = performance.now(), fpsN = 0, fpsT = 0;
 function loop(now) {
-  applySettings();
-requestAnimationFrame(loop);
+  requestAnimationFrame(loop);
   if (settings.showFps && (fpsN++, (fpsT += (now - last) / 1000) >= 0.5)) { $('fps').textContent = Math.round(fpsN / fpsT) + ' FPS'; fpsN = fpsT = 0; }
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const playing = PLAYING.includes(S.state);
+  S.view3 = S.tps || !!(player.grab || player.heldBy || (player.thrown && !player.grounded)); // giro do furacão: 3ª pessoa
   const running = playing && (input.locked || S.online); // online não pausa
   let animDt = 0;
 
@@ -818,7 +935,7 @@ requestAnimationFrame(loop);
     let sim = dt * S.timeScale * (S.slowT > 0 ? 0.3 : 1);
     if (S.hitstop > 0) { S.hitstop -= dt; sim = 0; } // congela no impacto
     input.fill(player.input, active && input.locked);
-    if (S.tps) tpsAim();
+    if (S.view3) tpsAim();
     if (S.online) remote.apply(enemy); // oponente: estado da rede, interpolado
     else if (sim > 0) bot.update(sim, enemy, player, enemy.input, active);
     if (sim > 0) {
@@ -838,7 +955,7 @@ requestAnimationFrame(loop);
     handleEvents();
     if ((S.ghostT -= sim) <= 0) {
       S.ghostT = 0.025;
-      if (player.dashT > 0 && S.tps) fx.ghost(player, player.color);
+      if (player.dashT > 0 && S.view3) fx.ghost(player, player.color);
       if (enemy.dashT > 0) fx.ghost(enemy, enemy.color);
     }
     animDt = sim;
@@ -847,13 +964,15 @@ requestAnimationFrame(loop);
   if (running) lockOnCamera(dt); // pausado não puxa
   if (running && S.turnT > 0) { const st = Math.min(dt, S.turnT); input.yaw += (S.turn * st) / 0.12; S.turnT -= st; } // giro do Passo Sombrio
   // a mira responde mesmo no hitstop (3ª pessoa: mira no ponto da cruz; 1ª pessoa: igual à câmera)
-  if (S.tps && playing) tpsAim();
+  if (S.view3 && playing) tpsAim();
   else { player.input.yaw = input.yaw; player.input.pitch = input.pitch; }
   if (!player.ko) { player.yaw = player.input.yaw; player.pitch = player.input.pitch; } // caído não gira
-  pRig.visible = S.tps || !playing;
-  fpRig.visible = !S.tps && playing;
+  pRig.visible = S.view3 || !playing;
+  fpRig.visible = !S.view3 && playing;
   pRig.update(player, animDt, enemy);
   eRig.update(enemy, animDt, player);
+  if (player.grab) pRig.linkHands(eRig); // giro do furacão: mãos dadas
+  if (enemy.grab) eRig.linkHands(pRig);
   if (fpRig.root.visible) {
     fpRig.update(player, animDt, enemy);
     // braços "atrasam" um pouco atrás do mouse (sway), presos na câmera
@@ -874,6 +993,10 @@ requestAnimationFrame(loop);
   }
   arena.sky.position.copy(camera.position);
   arena.update(now * 0.001, dt);
+  // som de fundo: a torcida segue a empolgação da luta; vento enquanto alguém gira o furacão
+  const spin = player.grab ? player : enemy.grab ? enemy : null;
+  sfx.ambience(playing ? 0.14 + 0.32 * Math.min(1, arena.hypeLevel) : 0.06);
+  sfx.wind(spin ? 0.9 * vol(spin) * Math.min(1, spin.grab.t / 0.25) : 0, spin ? 0.8 + 0.7 * Math.min(1, spin.grab.t / T.spinTime) : 1);
   adaptRes(dt);
   updateHUD(dt);
   document.body.classList.toggle('ingame', playing);
