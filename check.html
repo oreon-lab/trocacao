@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checagem do boneco</title>
+<style>
+  body { margin: 0; background: #dff0ff; font: 13px system-ui, sans-serif; color: #16121f; }
+  canvas { display: block; width: 100vw; height: 78vh; }
+  #out { padding: 6px 10px; }
+  .bad { color: #c0221b; font-weight: 700; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="out"></div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+// Folha de poses: roda o Rig de verdade com estados do lutador e congela no momento-chave de cada um.
+// Checa também se os pés ficam no chão e se a altura bate com a hitbox. http://localhost:5173/check.html?c=Knight
+import * as THREE from 'three';
+import { Rig, loadCharacters } from './src/rig.js';
+import { Fighter } from './src/fighter.js';
+import { ATTACKS } from './src/config.js';
+
+await loadCharacters();
+const char = new URLSearchParams(location.search).get('c') || 'Barbarian';
+const atk = (kind, hand) => f => { f.atk = { kind, def: ATTACKS[kind], t: 0, phase: 'windup', hand, hit: false }; };
+// [nome, preparar estado, segundos de animação até a foto, avançar o golpe junto?]
+const POSES = [
+  ['parado', f => {}, 0.6],
+  ['correndo', f => { f.vel.set(0, 0, -7.5); }, 0.5],
+  ['guarda', f => { f.queued = 'light'; }, 0.5],
+  ['strafe', f => { f.queued = 'light'; f.vel.set(7, 0, 0); }, 0.4],
+  ['jab', atk('light', 0), 0.1, true],
+  ['direto', atk('light', 1), 0.1, true],
+  ['pesado', atk('heavy', 1), 0.35, true],
+  ['chute', f => { atk('sweep', 1)(f); f.sliding = true; }, 0.05, true],
+  ['defesa', f => { f.blocking = true; }, 0.4],
+  ['dash lado', f => { f.dashT = 0.15; f.dashLocal = { x: -1, z: 0 }; }, 0.12],
+  ['apanhou', f => { f.flashT = 0.12; f.stunT = 0.5; }, 0.15],
+  ['K.O.', f => { f.ko = true; }, 1.5],
+];
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xdff0ff);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9ab0c8, 1.5));
+const sun = new THREE.DirectionalLight(0xffffff, 2.6);
+sun.position.set(12, 25, 10);
+scene.add(sun);
+
+const cols = 6, W = 1.9, H = 2.6, report = [];
+POSES.forEach(([name, setup, secs, advance], i) => {
+  const rig = new Rig(char);
+  const f = new Fighter('x', 0);
+  const x = ((i % cols) - (cols - 1) / 2) * W, y = i < cols ? H : 0;
+  f.reset(new THREE.Vector3(x, 0, 0), Math.PI - 0.7);
+  setup(f);
+  const vel = f.vel.clone(), foe = new Fighter('y', 0);
+  for (let t = 0; t < secs; t += 1 / 60) {
+    if (advance && f.atk) { // avança o golpe como o jogo faria
+      const a = f.atk, d = a.def;
+      a.t += 1 / 60;
+      if (a.phase === 'windup' && a.t >= d.windup) { a.phase = 'active'; a.t -= d.windup; }
+      if (a.phase === 'active' && a.t >= d.active) { a.phase = 'recovery'; a.t -= d.active; }
+    }
+    f.vel.copy(vel);
+    f.flashT = Math.max(0, f.flashT - 1 / 60);
+    rig.update(f, 1 / 60, foe);
+  }
+  rig.root.position.y = y; // só pra folha (a física usa y=0)
+  scene.add(rig.root);
+  rig.root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  rig.model.traverse(o => { if (o.isSkinnedMesh) { o.skeleton.update(); box.union(new THREE.Box3().setFromObject(o, true)); } });
+  report.push({ name, h: box.max.y - box.min.y, feet: box.min.y - y });
+});
+
+const bad = report.filter(r => !['K.O.', 'chute', 'apanhou'].includes(r.name) && (Math.abs(r.feet) > 0.12 || r.h < 1.3 || r.h > 2.6));
+document.getElementById('out').innerHTML = `<b>${char}</b> — ${bad.length ? `<span class="bad">${bad.length} pose(s) estranha(s): ${bad.map(b => b.name).join(', ')}</span>` : 'OK: pés no chão e altura certa em todas as poses'}<br>` +
+  report.map(r => `${r.name}: altura ${r.h.toFixed(2)} m, pés ${r.feet.toFixed(2)} m`).join(' · ');
+window.checkResult = { fails: bad.length, report };
+
+const cam = new THREE.PerspectiveCamera(26, 1, 0.1, 100);
+function loop() {
+  const w = innerWidth, h = innerHeight * 0.78;
+  renderer.setSize(w, h, false);
+  cam.aspect = w / h;
+  cam.position.set(0, H * 0.75, (cols * W) / 2 / Math.tan((26 * Math.PI) / 360) / cam.aspect + 2);
+  cam.lookAt(0, H * 0.62, 0);
+  cam.updateProjectionMatrix();
+  renderer.render(scene, cam);
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trocação</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #16121f; --p: #3fa7ff; --e: #ff5a4f; --y: #ffd23f; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #8fd3ff; font-family: 'Bangers', Impact, sans-serif; color: #fff; user-select: none; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .stroke { -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; text-shadow: 3px 3px 0 var(--ink); }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .2s; }
+  body.ingame #hud { opacity: 1; }
+  .bars { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); width: min(1100px, 94vw); display: flex; align-items: flex-start; gap: 16px; }
+  .side { flex: 1; }
+  .name { font-size: 26px; letter-spacing: 2px; margin-bottom: 4px; }
+  .side.right .name, .side.right .wins { text-align: right; }
+  .bar { position: relative; height: 30px; background: #3a3246; border: 4px solid var(--ink); border-radius: 6px; box-shadow: 4px 4px 0 var(--ink); overflow: hidden; transform: skewX(-12deg); }
+  .side.right .bar { transform: skewX(12deg); }
+  .bar div { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; }
+  .side.right .bar div { left: auto; right: 0; }
+  .bar .trail { background: #fff; }
+  .side.left .fill { background: linear-gradient(#7cc6ff, var(--p)); }
+  .side.right .fill { background: linear-gradient(#ff8f86, var(--e)); }
+  .wins { margin-top: 6px; }
+  .wins i { display: inline-block; width: 18px; height: 18px; margin: 0 3px; border: 3px solid var(--ink); border-radius: 50%; background: #3a3246; }
+  .wins i.on { background: var(--y); }
+  #timer { min-width: 86px; text-align: center; font-size: 54px; line-height: 1; padding: 4px 10px; background: var(--y); color: var(--ink); border: 4px solid var(--ink); border-radius: 10px; box-shadow: 4px 4px 0 var(--ink); }
+
+  #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); }
+  #cross::before, #cross::after { content: ''; position: absolute; background: #fff; border: 2px solid var(--ink); border-radius: 3px; }
+  #cross::before { left: 8px; top: 0; width: 6px; height: 22px; }
+  #cross::after { top: 8px; left: 0; width: 22px; height: 6px; }
+  #cross.hot::before, #cross.hot::after { background: var(--y); }
+  #cross.hot { transform: translate(-50%, -50%) rotate(45deg); transition: transform .08s; }
+
+  /* aviso de ataque: anel fecha até a mira = golpe chegando (defender bem no fim = parry) */
+  #warnRing { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; border: 6px solid #ffd23f; border-radius: 50%; opacity: 0; box-shadow: 0 0 0 3px var(--ink), inset 0 0 0 3px var(--ink); }
+  #warnRing::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; border: 2px dashed rgba(255,255,255,.8); }
+  #warnText { position: absolute; left: 50%; top: calc(50% - 74px); transform: translateX(-50%); font-size: 34px; opacity: 0; -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; text-shadow: 3px 3px 0 var(--ink); }
+  #mark { --c: #ffd23f; position: absolute; left: 0; top: 0; opacity: 0; width: 46px; height: 46px; display: grid; place-items: center; }
+  #mark span { font-size: 40px; line-height: 1; color: var(--c); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; display: none; }
+  #mark b { font-size: 34px; color: #fff; -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; display: none; }
+  #mark.hot span { display: block; }
+  #mark.hot { background: #fff; border: 4px solid var(--ink); border-radius: 50% 50% 50% 8px; box-shadow: 3px 3px 0 var(--ink); }
+  #mark.off b { display: block; }
+  #mark.off span { display: none; }
+  #mark.off.hot { background: none; border: none; box-shadow: none; }
+  #mark.off.hot b { color: var(--c); font-size: 46px; }
+  .pop.combo { color: #fff; font-size: 24px; }
+
+  #dashes { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); display: flex; gap: 6px; }
+  #dashes div { width: 14px; height: 22px; border: 3px solid var(--ink); border-radius: 4px; background: #3a3246aa; overflow: hidden; display: flex; align-items: flex-end; }
+  #dashes i { display: block; width: 100%; height: 100%; background: #7fd8ff; transform-origin: bottom; }
+  #dashes div.full i { background: #fff; }
+
+  #banner { position: absolute; left: 0; right: 0; top: 34%; text-align: center; font-size: 110px; color: var(--y); opacity: 0; -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; text-shadow: 7px 7px 0 var(--ink); }
+  #banner.big { font-size: 170px; color: #fff; }
+  #banner.show { animation: pop 1.3s ease-out forwards; }
+  @keyframes pop { 0% { opacity: 0; transform: scale(2.4) rotate(-6deg); } 12% { opacity: 1; transform: scale(.9) rotate(-3deg); } 20% { transform: scale(1.05) rotate(-3deg); } 80% { opacity: 1; } 100% { opacity: 0; transform: scale(1) rotate(-3deg); } }
+
+  #speed { position: absolute; inset: -20%; opacity: 0; background: repeating-conic-gradient(from 0deg, transparent 0 4deg, rgba(255,255,255,.75) 4deg 5deg); -webkit-mask-image: radial-gradient(circle, transparent 32%, #000 72%); mask-image: radial-gradient(circle, transparent 32%, #000 72%); }
+  #hurt { position: absolute; inset: 0; opacity: 0; background: radial-gradient(circle, transparent 45%, rgba(255,40,40,.75) 100%); }
+
+  .pop { position: absolute; left: 0; top: 0; font-size: 34px; color: #fff; -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; text-shadow: 3px 3px 0 var(--ink); white-space: nowrap; }
+  .pop.big { font-size: 52px; color: var(--y); }
+  .pop.small { font-size: 26px; color: #7fd8ff; }
+  .pop.cyan { color: #7fffe8; }
+  .pop.orange { color: #ff8a3d; }
+
+  /* menu */
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle, rgba(22,18,31,.25), rgba(22,18,31,.7)); }
+  #menu.hidden { display: none; }
+  .panel { width: min(860px, 94vw); max-height: 94vh; overflow: auto; background: #fff6e0; color: var(--ink); border: 5px solid var(--ink); border-radius: 18px; box-shadow: 10px 10px 0 var(--ink); padding: 24px 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 32px; }
+  h1 { grid-column: 1 / -1; margin: 0; text-align: center; font-size: 92px; line-height: 1; color: var(--y); -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; text-shadow: 6px 6px 0 var(--ink); transform: rotate(-2deg); }
+  #play { grid-column: 1 / -1; justify-self: center; font: inherit; font-size: 44px; padding: 6px 48px; color: #fff; background: var(--e); border: 5px solid var(--ink); border-radius: 14px; box-shadow: 6px 6px 0 var(--ink); cursor: pointer; letter-spacing: 2px; }
+  #play:hover { transform: translate(-2px, -2px); box-shadow: 8px 8px 0 var(--ink); }
+  #play:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 var(--ink); }
+  .online { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; }
+  #room { font: inherit; font-size: 22px; width: 190px; padding: 4px 10px; text-align: center; text-transform: uppercase; border: 4px solid var(--ink); border-radius: 10px; }
+  #online { font: inherit; font-size: 24px; padding: 4px 20px; color: #fff; background: #3fa7ff; border: 4px solid var(--ink); border-radius: 10px; box-shadow: 4px 4px 0 var(--ink); cursor: pointer; }
+  #netStatus { width: 100%; text-align: center; font-family: system-ui, sans-serif; font-size: 13px; font-weight: 700; }
+  h2 { margin: 6px 0 4px; font-size: 28px; letter-spacing: 1px; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 600; }
+  .row label { min-width: 110px; }
+  .row input[type=range] { flex: 1; accent-color: var(--e); }
+  .diff { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+  .panel > div { min-width: 0; }
+  .diff button { font: inherit; font-size: 20px; padding: 2px 14px; border: 3px solid var(--ink); border-radius: 8px; background: #fff; cursor: pointer; }
+  .diff button.on { background: var(--y); }
+  table { width: 100%; border-collapse: collapse; font-family: system-ui, sans-serif; font-size: 13px; }
+  td { padding: 3px 4px; border-bottom: 2px dashed #e4d3ad; }
+  td:first-child { white-space: nowrap; font-weight: 800; }
+  kbd { display: inline-block; padding: 0 6px; border: 2px solid var(--ink); border-bottom-width: 3px; border-radius: 5px; background: #fff; font-family: inherit; font-size: 12px; }
+  @media (max-width: 720px) { .panel { grid-template-columns: 1fr; } h1 { font-size: 64px; } }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div id="speed"></div>
+  <div id="hurt"></div>
+  <div class="bars">
+    <div class="side left">
+      <div class="name stroke" id="pName">VOCÊ</div>
+      <div class="bar"><div class="trail" id="pTrail"></div><div class="fill" id="pFill"></div></div>
+      <div class="wins" id="pWins"><i></i><i></i></div>
+    </div>
+    <div id="timer">99</div>
+    <div class="side right">
+      <div class="name stroke" id="eName">BOT</div>
+      <div class="bar"><div class="trail" id="eTrail"></div><div class="fill" id="eFill"></div></div>
+      <div class="wins" id="eWins"><i></i><i></i></div>
+    </div>
+  </div>
+  <div id="warnRing"></div>
+  <div id="warnText"></div>
+  <div id="mark"><span>!</span><b>➤</b></div>
+  <div id="cross"></div>
+  <div id="dashes"></div>
+  <div id="banner"></div>
+  <div id="pops"></div>
+</div>
+
+<div id="menu">
+  <div class="panel">
+    <h1 id="menuTitle">TROCAÇÃO</h1>
+    <button id="play">JOGAR</button>
+    <div class="online">
+      <input id="room" maxlength="8" placeholder="CÓDIGO DA SALA" autocomplete="off">
+      <button id="online">ONLINE 1v1</button>
+      <div id="netStatus">Deixe o código vazio pra criar uma sala nova, ou digite o código do amigo.</div>
+    </div>
+    <div>
+      <h2>Configurações</h2>
+      <div class="row"><label>Personagem</label><div class="diff" id="chars"></div></div>
+      <div class="row"><label>Dificuldade</label>
+        <div class="diff"><button data-d="easy">Fácil</button><button data-d="normal">Normal</button><button data-d="hard">Difícil</button></div>
+      </div>
+      <div class="row"><label>Sensibilidade <b id="sensV"></b></label><input id="sens" type="range" min="0.2" max="3" step="0.05"></div>
+      <div class="row"><label>FOV <b id="fovV"></b></label><input id="fov" type="range" min="65" max="105" step="1"></div>
+      <div class="row"><label>Volume</label><input id="vol" type="range" min="0" max="1" step="0.05"></div>
+      <div class="row"><input id="tps" type="checkbox"><label for="tps">Câmera em 3ª pessoa (V alterna)</label></div>
+      <div class="row"><input id="dbl" type="checkbox"><label for="dbl">Dash com toque duplo no WASD</label></div>
+      <div class="row"><input id="fs" type="checkbox"><label for="fs">Tela cheia (libera o Ctrl sem fechar a aba · F11 sai)</label></div>
+    </div>
+    <div>
+      <h2>Controles</h2>
+      <table>
+        <tr><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse</td><td>Mover / mirar</td></tr>
+        <tr><td><kbd>Espaço</kbd></td><td>Pular (segure = mais alto)</td></tr>
+        <tr><td><kbd>Shift</kbd></td><td>Dash na direção do WASD (3 cargas, 1 no ar)</td></tr>
+        <tr><td><kbd>Ctrl</kbd> / <kbd>C</kbd></td><td>Agachar · correndo/dash + agachar = slide</td></tr>
+        <tr><td>Botão esq.</td><td>Soco rápido (alterna as mãos)</td></tr>
+        <tr><td>Botão dir.</td><td>Soco pesado (quebra defesa)</td></tr>
+        <tr><td><kbd>F</kbd> / <kbd>E</kbd></td><td>Defender · apertar na hora = PARRY</td></tr>
+        <tr><td>Dash + esq.</td><td>Investida</td></tr>
+        <tr><td>Slide + soco</td><td>Rasteira (lança; só defende agachado)</td></tr>
+        <tr><td><kbd>V</kbd></td><td>1ª / 3ª pessoa</td></tr>
+        <tr><td><kbd>Esc</kbd> / <kbd>P</kbd></td><td>Pausar</td></tr>
+        <tr><td><kbd>F11</kbd> / <kbd>Alt</kbd>+<kbd>Enter</kbd></td><td>Entrar/sair da tela cheia</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
