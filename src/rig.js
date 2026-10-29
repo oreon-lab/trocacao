@@ -25,7 +25,7 @@ const CLIP = {
   idle: 'Idle', guard: 'Unarmed_Idle', run: 'Running_A', back: 'Walking_Backwards',
   left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', air: 'Jump_Idle',
   jabL: 'Unarmed_Melee_Attack_Punch_B', jabR: 'Unarmed_Melee_Attack_Punch_A', heavy: 'Uppercut',
-  kick: 'Unarmed_Melee_Attack_Kick', block: 'Block_Guard', blockHit: 'Block_Guard', hit: 'Hit_A', hitHeavy: 'Hit_B',
+  kick: 'Unarmed_Melee_Attack_Kick', block: 'Block_Guard', blockHit: 'Guard_Hit', hit: 'Hit_A', hitHeavy: 'Hit_B',
   ko: 'Death_A', cheer: 'Cheer',
   // habilidades: Ground_Slam, Shield_Charge e Meteor_Call feitas no Blender (tools/fp_anims.py); a facada dupla é do pacote
   slam: 'Ground_Slam', bash: 'Shield_Charge', stab: 'Dualwield_Melee_Attack_Stab', spell: 'Meteor_Call', dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',

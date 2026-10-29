@@ -29,7 +29,9 @@ import { Fighter } from './src/fighter.js';
 import { ATTACKS } from './src/config.js';
 
 await loadCharacters();
-const char = new URLSearchParams(location.search).get('c') || 'Barbarian';
+const params = new URLSearchParams(location.search);
+const char = params.get('c') || 'Barbarian';
+const only = params.get('only')?.split(','); // ?only=defesa,defesa-golpe mostra só essas, maiores
 const atk = (kind, hand) => f => { f.atk = { kind, def: ATTACKS[kind], t: 0, phase: 'windup', hand, hit: false }; };
 // [nome, preparar estado, segundos de animação até a foto, avançar o golpe junto?]
 const POSES = [
@@ -42,6 +44,7 @@ const POSES = [
   ['pesado', atk('heavy', 1), 0.35, true],
   ['chute', f => { atk('sweep', 1)(f); f.sliding = true; }, 0.05, true],
   ['defesa', f => { f.blocking = true; }, 0.4],
+  ['defesa-golpe', f => { f.blocking = true; f.hp -= 1; }, 0.1], // golpe batendo na guarda (pico do recuo)
   ['dash lado', f => { f.dashT = 0.15; f.dashLocal = { x: -1, z: 0 }; }, 0.12],
   ['apanhou', f => { f.flashT = 0.12; f.stunT = 0.5; }, 0.15],
   ['K.O.', f => { f.ko = true; }, 1.5],
@@ -57,11 +60,12 @@ const sun = new THREE.DirectionalLight(0xffffff, 2.6);
 sun.position.set(12, 25, 10);
 scene.add(sun);
 
-const cols = 6, W = 1.9, H = 2.6, report = [];
-POSES.forEach(([name, setup, secs, advance], i) => {
+const LIST = only ? POSES.filter(p => only.includes(p[0])) : POSES;
+const cols = Math.min(6, LIST.length), W = 1.9, H = 2.6, report = [];
+LIST.forEach(([name, setup, secs, advance], i) => {
   const rig = new Rig(char);
   const f = new Fighter('x', 0);
-  const x = ((i % cols) - (cols - 1) / 2) * W, y = i < cols ? H : 0;
+  const x = ((i % cols) - (cols - 1) / 2) * W, y = LIST.length <= cols ? 0 : i < cols ? H : 0;
   f.reset(new THREE.Vector3(x, 0, 0), Math.PI - 0.7);
   setup(f);
   const vel = f.vel.clone(), foe = new Fighter('y', 0);
@@ -84,7 +88,7 @@ POSES.forEach(([name, setup, secs, advance], i) => {
   report.push({ name, h: box.max.y - box.min.y, feet: box.min.y - y });
 });
 
-const bad = report.filter(r => !['K.O.', 'chute', 'apanhou'].includes(r.name) && (Math.abs(r.feet) > 0.12 || r.h < 1.3 || r.h > 2.6));
+const bad = report.filter(r => !['K.O.', 'chute', 'apanhou', 'defesa-golpe'].includes(r.name) && (Math.abs(r.feet) > 0.12 || r.h < 1.3 || r.h > 2.6));
 document.getElementById('out').innerHTML = `<b>${char}</b> — ${bad.length ? `<span class="bad">${bad.length} pose(s) estranha(s): ${bad.map(b => b.name).join(', ')}</span>` : 'OK: pés no chão e altura certa em todas as poses'}<br>` +
   report.map(r => `${r.name}: altura ${r.h.toFixed(2)} m, pés ${r.feet.toFixed(2)} m`).join(' · ');
 window.checkResult = { fails: bad.length, report };
@@ -94,8 +98,9 @@ function loop() {
   const w = innerWidth, h = innerHeight * 0.78;
   renderer.setSize(w, h, false);
   cam.aspect = w / h;
-  cam.position.set(0, H * 0.75, (cols * W) / 2 / Math.tan((26 * Math.PI) / 360) / cam.aspect + 2);
-  cam.lookAt(0, H * 0.62, 0);
+  const rows = LIST.length > cols ? 2 : 1, cy = rows === 2 ? H * 0.62 : 1.05;
+  cam.position.set(0, cy + 0.15, Math.max((cols * W) / 2 / Math.tan((26 * Math.PI) / 360) / cam.aspect, rows * H * 0.55 / Math.tan((26 * Math.PI) / 360)) + 2);
+  cam.lookAt(0, cy, 0);
   cam.updateProjectionMatrix();
   renderer.render(scene, cam);
   requestAnimationFrame(loop);

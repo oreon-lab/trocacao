@@ -89,7 +89,7 @@ D = 0.09
 GL, GR = (0.28, -0.50, 1.10), (-0.28, -0.46, 1.07)          # guarda 1ª pessoa
 BL, BR = (0.097, -0.50, 1.15), (-0.143, -0.48, 1.14)          # defesa 1ª pessoa: luvas na frente do rosto
 TL, TR = (0.25, -0.30, 1.22), (-0.25, -0.28, 1.20)          # guarda 3ª pessoa (pro uppercut voltar)
-KL, KR = (0.38, -0.32, 1.40), (-0.43, -0.31, 1.39)          # defesa 3ª pessoa: luvas nas bochechas, dos lados da cabeça (a cabeça é grande demais pra cobrir na frente)
+KL, KR = (0.34, -0.54, 1.27), (-0.36, -0.55, 1.26)          # defesa 3ª pessoa: guarda alta de boxe, luvas na frente das bochechas, do lado da barba (a cabeça é grande demais pra cobrir na frente)
 POLE_OUT = {'l': (0.35, 0.3, 0.55), 'r': (-0.35, 0.3, 0.55)}
 POLE_IN = {'l': (0.15, -0.05, 0.6), 'r': (-0.15, -0.05, 0.6)}  # cotovelos fechados (defesa 1ª pessoa)
 POLE_X = {'l': (0.6, -0.25, 0.95), 'r': (-0.6, -0.25, 0.95)}  # cotovelos abertos (guarda em X)
@@ -103,7 +103,15 @@ CLIPS = {
                       r=track([(0, GR), (2, (-0.27, -0.42, 1.05)), (6, (-0.03, -0.72, 1.47)), (8, (-0.03, -0.72, 1.47)), (17, GR)]),
                       tw=track([(0, 0.0), (6, 22.0), (17, 0.0)]), drop=D),
     'FP_Block': dict(n=32, l=bob(BL, 0.008), r=bob(BR, 0.008), tw=zero, drop=D, pole=POLE_IN),
-    'Block_Guard': dict(n=32, l=bob(KL, 0.008), r=bob(KR, 0.008), tw=zero, drop=0, pole=POLE_IN, lean=14, crouch=0.08, chin=-8),
+    'Block_Guard': dict(n=32, l=bob(KL, 0.008), r=bob(KR, 0.008), tw=zero, drop=0, pole=POLE_IN, lean=8, crouch=0.07, hip=4, chin=-5, legs=True),
+    # golpe batendo na guarda: luvas empurradas contra o rosto, corpo recua e volta pra guarda
+    'Guard_Hit': dict(n=12, pole=POLE_IN, drop=0, tw=zero, legs=True,
+                      l=track([(0, KL), (3, (0.30, -0.44, 1.34)), (12, KL)]),
+                      r=track([(0, KR), (3, (-0.32, -0.45, 1.33)), (12, KR)]),
+                      lean=track([(0, 8.0), (3, -6.0), (12, 8.0)]),
+                      crouch=track([(0, 0.07), (3, 0.10), (12, 0.07)]),
+                      hip=track([(0, 4.0), (3, -6.0), (12, 4.0)]),
+                      chin=track([(0, -5.0), (3, 4.0), (12, -5.0)])),
     'Uppercut': dict(n=27, l=track([(0, TL), (8, (0.24, -0.32, 1.20)), (13, (0.22, -0.30, 1.22)), (27, TL)]),
                      r=track([(0, TR), (8, (-0.30, -0.25, 0.90)), (13, (-0.06, -0.50, 1.42)), (15, (-0.06, -0.50, 1.44)), (27, TR)]),
                      tw=track([(0, 0.0), (8, -18.0), (13, 26.0), (15, 26.0), (27, 0.0)]), drop=0),
@@ -169,6 +177,22 @@ for name, c in CLIPS.items():
             m = arm.convert_space(pose_bone=pb, matrix=pb.matrix, from_space='POSE', to_space='LOCAL')
             pose[pb.name] = m.decompose()
         frames.append(pose)
+        # checagem dos braços: cotovelo do lado certo do corpo e do lado do polo (senão o braço inverteu)
+        if f in (0, c['n'] // 4, c['n'] // 2, 3 * c['n'] // 4):
+            chk = {}
+            for sd, sx in (('l', 1), ('r', -1)):
+                sh = arm.matrix_world @ arm.pose.bones['upperarm.' + sd].head
+                el = arm.matrix_world @ arm.pose.bones['lowerarm.' + sd].head
+                wr = arm.matrix_world @ arm.pose.bones['lowerarm.' + sd].tail
+                axis = (wr - sh).normalized()
+                foot = sh + axis * (el - sh).dot(axis)
+                pl = Vector(P[sd].location)
+                pfoot = sh + axis * (pl - sh).dot(axis)
+                pole_ok = (el - foot).dot(pl - pfoot) > 0
+                side_ok = el.x * sx > 0.08
+                miss = round((wr - Vector(T[sd].location)).length, 3)
+                chk[sd] = ('ok' if pole_ok and side_ok else 'PROBLEMA') + f' polo={pole_ok} lado={side_ok} erro_alvo={miss} cotovelo={[round(v, 2) for v in el]}'
+            DBG.setdefault('braços', {}).setdefault(name, {})[f] = chk
         if os.environ.get('DEBUG_CLIP') == name and f == int(os.environ.get('DEBUG_FRAME', '8')):
             for sd in ('l', 'r'):
                 DBG['leg_' + sd] = {'tornozelo': [round(v, 3) for v in arm.matrix_world @ arm.pose.bones['lowerleg.' + sd].tail], 'alvo': [round(v, 3) for v in LEG[sd][0].location], 'inf': LEG[sd][2].influence, 'is_valid': LEG[sd][2].is_valid}
@@ -212,6 +236,10 @@ for name, frames in baked.items():
     act.use_fake_user = True
 # cópia da Unarmed_Idle reexportada: serve pra conferir no three.js que o rig bate com o original
 test = idle.copy(); test.name = 'RoundTrip_Idle'; keep.add(test.name); test.use_fake_user = True
+# SAVE_BLEND=caminho.blend -> salva o boneco com as animações assadas (pra abrir/conferir no Blender)
+if os.environ.get('SAVE_BLEND'):
+    set_action(bpy.data.actions['Block_Guard'])
+    bpy.ops.wm.save_as_mainfile(filepath=os.environ['SAVE_BLEND'], copy=True)
 
 # RENDER=Clip,Clip2 -> renderiza essas poses de frente e de lado (pra conferir) em RENDER_DIR
 if os.environ.get('RENDER'):
@@ -231,9 +259,14 @@ if os.environ.get('RENDER'):
         clip, _, fr = spec.partition(':')
         set_action(bpy.data.actions[clip]); scene.frame_set(int(fr or os.environ.get('RENDER_FRAME', '8')))
         clip = spec.replace(':', '_f')
-        for view, loc in (('frente', (1.4, -4.6, 1.3)), ('frente2', (-1.6, -4.4, 1.3)), ('reta', (0.0, -4.8, 1.3)), ('lado', (4.8, -0.3, 1.2))):
+        # corpo inteiro de 7 lados + close nos braços de 5 lados (pegar cotovelo invertido / ombro torcido)
+        VIEWS = (('frente', (1.4, -4.6, 1.3), 0.95), ('frente2', (-1.6, -4.4, 1.3), 0.95), ('reta', (0.0, -4.8, 1.3), 0.95),
+                 ('lado', (4.8, -0.3, 1.2), 0.95), ('lado2', (-4.8, -0.3, 1.2), 0.95), ('costas', (0.6, 4.8, 1.4), 0.95), ('cima', (0.3, -1.6, 4.6), 0.95),
+                 ('close_frente', (0.8, -2.0, 1.4), 1.12), ('close_frente2', (-0.8, -2.0, 1.4), 1.12), ('close_lado', (2.1, -0.5, 1.25), 1.12),
+                 ('close_lado2', (-2.1, -0.5, 1.25), 1.12), ('close_cima', (0.1, -0.9, 2.5), 1.12))
+        for view, loc, tz in VIEWS:
             cam.location = loc
-            d = Vector((0, 0, 0.95)) - Vector(loc)
+            d = Vector((0, -0.25 if view.startswith('close') else 0, tz)) - Vector(loc)
             cam.rotation_euler = d.to_track_quat('-Z', 'Y').to_euler()
             scene.render.filepath = os.path.join(out_dir, f'{clip}_{view}.png')
             bpy.ops.render.render(write_still=True)
