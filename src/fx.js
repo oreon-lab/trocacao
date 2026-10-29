@@ -16,11 +16,60 @@ function starGeo(spikes = 9) {
   return new THREE.ShapeGeometry(s);
 }
 
+function canvasTex(size, draw) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// brilho redondo (halo da bola, rastro, aura, clarão)
+const glowTex = canvasTex(64, (g, s) => {
+  const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  gr.addColorStop(0, '#fff');
+  gr.addColorStop(0.3, 'rgba(255,255,255,.75)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, s, s);
+});
+// coluna de luz: forte embaixo, some em cima
+const fadeTex = canvasTex(64, (g, s) => {
+  const gr = g.createLinearGradient(0, 0, 0, s);
+  gr.addColorStop(0, 'rgba(255,255,255,0)');
+  gr.addColorStop(1, '#fff');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, s, s);
+});
+// círculo mágico do super: anéis, estrela de 6 pontas e runas
+const circleTex = canvasTex(256, (g, s) => {
+  g.translate(s / 2, s / 2);
+  g.strokeStyle = '#fff';
+  g.lineCap = 'round';
+  const ring = (r, w) => { g.lineWidth = w; g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.stroke(); };
+  ring(122, 7); ring(100, 3); ring(56, 4);
+  g.lineWidth = 4;
+  for (const off of [0, Math.PI]) {
+    g.beginPath();
+    for (let i = 0; i <= 3; i++) { const a = off + (i * Math.PI * 2) / 3 - Math.PI / 2; g.lineTo(Math.cos(a) * 100, Math.sin(a) * 100); }
+    g.stroke();
+  }
+  g.lineWidth = 3;
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2, r1 = i % 2 ? 112 : 118;
+    g.beginPath();
+    g.moveTo(Math.cos(a) * 104, Math.sin(a) * 104);
+    g.lineTo(Math.cos(a + 0.08) * r1, Math.sin(a + 0.08) * r1);
+    g.stroke();
+  }
+});
+
 export class FX {
   constructor(scene, camera) {
     this.scene = scene;
     this.camera = camera;
     this.list = [];
+    this.density = 1; // Configurações > Vídeo > Partículas
     this.sphere = new THREE.SphereGeometry(1, 8, 6);
     this.star = starGeo();
     this.capsule = new THREE.CapsuleGeometry(0.35, 1.1, 4, 10);
@@ -33,6 +82,7 @@ export class FX {
   }
 
   burst(p, color, n = 10, speed = 6, size = 0.08) {
+    n = Math.max(1, Math.round(n * this.density));
     for (let i = 0; i < n; i++) {
       const m = new THREE.Mesh(this.sphere, basic(color));
       m.position.copy(p);
@@ -86,6 +136,79 @@ export class FX {
 
   dust(p, n = 6) {
     this.burst(new THREE.Vector3(p.x, p.y + 0.1, p.z), 0xffffff, n, 3, 0.12);
+  }
+
+  // sprite com halo; cada um tem material próprio pra poder sumir aos poucos
+  glow(color, size, opacity = 0.8) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, opacity, depthWrite: false }));
+    s.scale.setScalar(size);
+    return s;
+  }
+  // bolinha brilhante que encolhe e some (rastro da bola, aura do super)
+  puff(p, color, size = 0.5, life = 0.3, vel = null) {
+    if (this.density < 1 && Math.random() > this.density) return;
+    const s = this.glow(color, size);
+    s.position.copy(p);
+    this.add(s, life, (dt, k) => {
+      if (vel) s.position.addScaledVector(vel, dt);
+      s.scale.setScalar(size * (1 - k * 0.8));
+      s.material.opacity = 0.8 * (1 - k);
+    }, () => s.material.dispose());
+  }
+  // clarão rápido
+  flash(p, color, size = 2) {
+    const s = this.glow(color, size, 1);
+    s.position.copy(p);
+    this.add(s, 0.18, (dt, k) => { s.scale.setScalar(size * (0.6 + k * 0.8)); s.material.opacity = 1 - k; }, () => s.material.dispose());
+  }
+  // onda de choque deitada no chão
+  groundRing(p, color, size = 4, life = 0.45) {
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide });
+    const m = new THREE.Mesh(this.ringGeo ||= new THREE.RingGeometry(0.8, 1, 40), mat);
+    m.rotation.x = -Math.PI / 2;
+    m.position.set(p.x, 0.05, p.z);
+    this.add(m, life, (dt, k) => { m.scale.setScalar(0.3 + size * Math.sqrt(k)); mat.opacity = 0.85 * (1 - k); }, () => mat.dispose());
+  }
+  // explosão da bola de energia / impacto do super
+  explode(p, color, big = false) {
+    const s = big ? 1.8 : 1;
+    this.flash(p, 0xffffff, 1.4 * s);
+    this.flash(p, color, 2.6 * s);
+    this.ring(p, color, 1.6 * s);
+    this.burst(p, color, big ? 26 : 14, 7 * s, 0.09);
+    this.burst(p, 0xffffff, big ? 10 : 5, 9 * s, 0.05);
+    if (p.y < 1.6) this.groundRing(p, color, 2.5 * s);
+  }
+  // super: coluna de luz subindo do lutador (de fora colorida, de dentro branca)
+  pillar(p, color) {
+    for (const [c, r, op] of [[color, 1, 0.65], [0xffffff, 0.45, 0.9]]) {
+      const mat = new THREE.MeshBasicMaterial({ color: c, map: fadeTex, transparent: true, opacity: op, depthWrite: false, side: THREE.DoubleSide });
+      const m = new THREE.Mesh(this.pillarGeo ||= new THREE.CylinderGeometry(1, 1, 1, 24, 1, true).translate(0, 0.5, 0), mat);
+      m.position.set(p.x, 0.02, p.z);
+      this.add(m, 0.65, (dt, k) => {
+        const w = r * (1 - k * 0.7);
+        m.scale.set(w, 10 * Math.min(1, k * 6), w);
+        mat.opacity = op * (1 - k);
+      }, () => mat.dispose());
+    }
+  }
+  // super: círculo mágico girando no chão embaixo do lutador enquanto ele carrega
+  magicCircle(f, color, life = 0.8) {
+    const mat = new THREE.MeshBasicMaterial({ color, map: circleTex, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+    const m = new THREE.Mesh(this.planeGeo ||= new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat);
+    this.add(m, life, (dt, k) => {
+      m.position.set(f.pos.x, 0.04, f.pos.z);
+      m.rotation.y += dt * 4;
+      const kin = Math.min(1, k / 0.15);
+      m.scale.setScalar(3.4 * kin);
+      mat.opacity = k > 0.75 ? (1 - k) / 0.25 : kin;
+    }, () => mat.dispose());
+  }
+  // super: faíscas subindo em volta do corpo
+  aura(f, color) {
+    const a = Math.random() * Math.PI * 2, r = 0.35 + Math.random() * 0.3;
+    const p = new THREE.Vector3(f.pos.x + Math.cos(a) * r, f.pos.y + Math.random() * f.height, f.pos.z + Math.sin(a) * r);
+    this.puff(p, Math.random() < 0.3 ? 0xffffff : color, 0.3 + Math.random() * 0.35, 0.45, new THREE.Vector3(0, 2.5 + Math.random() * 2.5, 0));
   }
 
   update(dt) {

@@ -172,10 +172,12 @@ export function createArena(scene) {
     R,
     sky,
     pillars,
+    crowd,
     hype(n) { hype = Math.min(1.5, hype + n); }, // torcida vibra com golpe forte
     // torcida pulando (só atualiza as matrizes; continua 1 draw call)
     update(t, dt) {
       hype = Math.max(0.15, hype - dt * 0.35);
+      if (!crowd.visible) return;
       fans.forEach((f, i) => {
         const jump = Math.max(0, Math.sin(t * f.sp + f.ph)) * (0.04 + 0.22 * hype);
         _q.setFromAxisAngle(_up, -f.a - Math.PI / 2);

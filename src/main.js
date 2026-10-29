@@ -3,10 +3,11 @@ import { T, ATTACKS } from './config.js';
 import { Fighter, events, damp, clamp, segSeg } from './fighter.js';
 import { Rig, loadCharacters, CHARACTERS } from './rig.js';
 import { createArena } from './arena.js';
-import { PlayerInput } from './input.js';
+import { PlayerInput, keyName } from './input.js';
 import { Bot } from './bot.js';
 import { Net, snapshot, Remote } from './net.js';
 import { FX, sfx, audio } from './fx.js';
+import { initMenu, DEFAULT_SETTINGS } from './menu.js';
 
 const $ = id => document.getElementById(id);
 
@@ -46,22 +47,31 @@ const bot = new Bot();
 const fx = new FX(scene, camera);
 
 // ---------- configurações (salvas no navegador) ----------
-const settings = { sens: 1, fov: 80, diff: 'normal', dbl: true, fs: true, vol: 0.6, tps: true, char: 'Barbarian' };
-try { Object.assign(settings, JSON.parse(localStorage.getItem('trocacao') || '{}')); } catch {}
+const settings = structuredClone(DEFAULT_SETTINGS);
+try {
+  const saved = JSON.parse(localStorage.getItem('trocacao') || '{}');
+  Object.assign(settings, saved, { binds: { ...settings.binds, ...saved.binds } }); // ação nova ganha a tecla padrão
+} catch {}
 const save = () => { try { localStorage.setItem('trocacao', JSON.stringify(settings)); } catch {} };
-function applySettings() {
-  input.sens = settings.sens;
-  input.doubleTap = settings.dbl;
+const HP = { short: 100, normal: 160, long: 220 };
+const VIDEO = new Set([undefined, 'quality', 'resScale', 'autoRes']);
+function applySettings(k) {
+  Object.assign(input, { sens: settings.sens, invertY: settings.invertY, doubleTap: settings.dbl, binds: settings.binds });
   audio.volume = settings.vol;
   bot.setLevel(settings.diff);
-  $('sens').value = settings.sens; $('sensV').textContent = (+settings.sens).toFixed(2);
-  $('fov').value = settings.fov; $('fovV').textContent = settings.fov;
-  $('vol').value = settings.vol;
-  $('dbl').checked = settings.dbl;
-  $('fs').checked = settings.fs;
-  $('tps').checked = settings.tps;
-  document.querySelectorAll('[data-d]').forEach(b => b.classList.toggle('on', b.dataset.d === settings.diff));
-  document.querySelectorAll('[data-c]').forEach(b => b.classList.toggle('on', b.dataset.c === settings.char));
+  S.tps = settings.tps;
+  sun.castShadow = settings.shadows;
+  arena.crowd.visible = settings.crowd;
+  fx.density = settings.particles;
+  $('fps').classList.toggle('hidden', !settings.showFps);
+  // HUD mostra as teclas configuradas
+  for (const [id, a] of [['dodgeKey', 'dodge'], ['skQk', 'q'], ['skRk', 'r']]) {
+    const name = keyName(settings.binds[a].find(Boolean));
+    $(id).textContent = name;
+    $(id).style.fontSize = name.length > 2 ? '15px' : '';
+  }
+  if (VIDEO.has(k)) { pr = maxPR(); renderer.setPixelRatio(pr); resize(); }
+  if (k === 'char' && !S.online) setCharacters();
 }
 // personagens: o seu + um diferente sorteado pro bot
 function setCharacters(foeChar) {
@@ -77,49 +87,108 @@ function setCharacters(foeChar) {
   $('pName').textContent = CHARACTERS[settings.char].toUpperCase();
   $('eName').textContent = CHARACTERS[botChar].toUpperCase() + (foeChar ? ' (ONLINE)' : ' (BOT)');
 }
-const charBox = $('chars');
-for (const [k, label] of Object.entries(CHARACTERS)) {
-  const b = document.createElement('button');
-  b.dataset.c = k;
-  b.textContent = label;
-  b.onclick = () => { if (S.online) return; settings.char = k; applySettings(); save(); setCharacters(); };
-  charBox.appendChild(b);
-}
-$('sens').oninput = e => { settings.sens = +e.target.value; applySettings(); save(); };
-$('fov').oninput = e => { settings.fov = +e.target.value; applySettings(); save(); };
-$('vol').oninput = e => { settings.vol = +e.target.value; applySettings(); save(); };
-$('dbl').onchange = e => { settings.dbl = e.target.checked; applySettings(); save(); };
-$('fs').onchange = e => { settings.fs = e.target.checked; save(); };
-$('tps').onchange = e => { settings.tps = S.tps = e.target.checked; save(); };
-document.querySelectorAll('[data-d]').forEach(b => (b.onclick = () => { settings.diff = b.dataset.d; applySettings(); save(); }));
-applySettings();
 setCharacters();
+
+// foto de cada lutador pra tela de escolha (renderiza uma vez no começo)
+function makeThumbs() {
+  const W = 360, H = 480, out = {};
+  const sc = new THREE.Scene();
+  sc.background = new THREE.Color(0xcdeaff);
+  const key = new THREE.DirectionalLight(0xffffff, 2.4);
+  key.position.set(2, 4, 5);
+  sc.add(new THREE.HemisphereLight(0xffffff, 0x9ab0c8, 1.6), key);
+  const cam = new THREE.PerspectiveCamera(28, W / H, 0.1, 30);
+  cam.position.set(0, 1.15, 4.4);
+  cam.lookAt(0, 0.92, 0);
+  const crop = document.createElement('canvas');
+  crop.width = W; crop.height = H;
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  for (const k of Object.keys(CHARACTERS)) {
+    const rig = new Rig(k);
+    rig.root.rotation.y = Math.PI + 0.45; // de frente, meio de lado
+    rig.base.guard.up.setEffectiveWeight(1);
+    rig.base.guard.lo.setEffectiveWeight(1);
+    rig.mixer.update(0.4);
+    sc.add(rig.root);
+    renderer.render(sc, cam);
+    crop.getContext('2d').drawImage(canvas, 0, 0); // lido na mesma hora que desenhou (não precisa preserveDrawingBuffer)
+    out[k] = crop.toDataURL('image/jpeg', 0.85);
+    sc.remove(rig.root);
+  }
+  return out;
+}
 
 // ---------- estado do jogo ----------
 const S = { online: false, host: false, netT: 0, state: 'menu', stateT: 0, round: 1, wins: [0, 0], timer: 99, timeScale: 1, hitstop: 0, tps: settings.tps, trauma: 0, roll: 0, dip: 0, dipV: 0, fov: 80, ghostT: 0, trail: [T.hp, T.hp], slowT: 0, kp: 0, kpv: 0, ky: 0, kyv: 0, kr: 0, krv: 0, kz: 0, kzv: 0 };
 const PLAYING = ['intro', 'fight', 'ko'];
 input.onToggleView = () => {
   settings.tps = S.tps = !S.tps;
-  $('tps').checked = S.tps;
   save();
 };
+const winsNeeded = () => (S.online ? 2 : settings.rounds);
+function makePips() {
+  for (const id of ['pWins', 'eWins']) $(id).innerHTML = '<i></i>'.repeat(winsNeeded());
+}
+
+// ---------- telas ----------
+const menu = initMenu({
+  settings, save, onChange: applySettings, characters: CHARACTERS, thumbs: makeThumbs(),
+  actions: {
+    fight: () => { startMatch(); lockPointer(); },
+    resume: lockPointer,
+    restart: () => {
+      if (!S.online) startMatch();
+      else if (S.host) { S.wins = [0, 0]; S.round = 1; startRound(); }
+      lockPointer();
+    },
+    quit: () => (S.online ? goOffline() : toHome()),
+    connect, leaveOnline: () => goOffline(), enterFight: lockPointer,
+  },
+});
+function toHome() {
+  S.state = 'menu';
+  while (projs.length) removeProj(0, false);
+  setCharacters();
+  menu.show('home');
+}
+function showPause() {
+  menu.setPause(S.online ? 'ONLINE' : 'PAUSADO', S.online);
+  menu.show('pause');
+}
+function showOver() {
+  menu.setOver(S.wins[0] > S.wins[1] ? 'VOCÊ VENCEU!' : 'VOCÊ PERDEU!', `${S.wins[0]} x ${S.wins[1]}`, !S.online || S.host);
+  menu.show('over');
+}
+function lockPointer() {
+  sfx.unlock();
+  // trava o mouse ANTES da tela cheia: a tela cheia gasta o "clique" e aí o mouse não travava (precisava de 2 cliques)
+  const pl = () => { const r = canvas.requestPointerLock({ unadjustedMovement: true }); r?.catch?.(() => canvas.requestPointerLock()?.catch?.(() => {})); };
+  pl();
+  if (settings.fs && !document.fullscreenElement) enterFullscreen().then(() => { if (!input.locked) pl(); }); // em tela cheia pode travar sem clique
+}
+// soltou o mouse (Esc / tecla de pausa) no meio da luta = pausa
+document.addEventListener('pointerlockchange', () => {
+  if (input.locked) menu.hide();
+  else if (PLAYING.includes(S.state)) showPause();
+});
 
 // ---------- online ----------
 // Cada um simula o próprio lutador e manda o estado 30x/s; o oponente é desenhado interpolado.
 // Golpe: quem bate detecta o acerto e manda 'hit'; quem apanha resolve (defesa/parry/acerto) e devolve 'res'.
 let net = null;
 const remote = new Remote();
-const netStatus = t => ($('netStatus').textContent = t);
+const netStatus = t => menu.setOnline(t, false);
+// sem msg = saiu por vontade própria (volta pro início); com msg = caiu (mostra o motivo na tela online)
 function goOffline(msg) {
   net?.close();
   net = null;
   S.online = S.host = false;
   enemy.remote = false;
-  S.state = 'menu';
-  setCharacters();
   document.exitPointerLock();
-  showMenu();
-  netStatus(msg || '');
+  toHome();
+  menu.setOnline(msg || '', false);
+  if (msg) menu.show('online');
 }
 enemy.onRemoteHit = (kind, point, mul) => net?.send({ t: 'hit', kind, mul });
 const NET = {
@@ -129,12 +198,17 @@ const NET = {
   hello: m => {
     S.online = true;
     enemy.remote = true;
+    T.hp = HP.normal; // online: vida padrão pros dois
     setCharacters(m.char);
-    netStatus('Oponente conectado! Clique em ENTRAR NA LUTA.');
+    makePips();
+    menu.setOnline('Oponente conectado! Clique em ENTRAR NA LUTA.', true);
     if (S.host) { S.wins = [0, 0]; S.round = 1; startRound(); }
-    showMenu();
+    if (!input.locked) menu.show('online');
   },
-  round: m => { S.round = m.round; S.wins = [m.wins[1], m.wins[0]]; startRound(); },
+  round: m => {
+    S.round = m.round; S.wins = [m.wins[1], m.wins[0]]; startRound();
+    if (menu.current === 'over') showPause(); // host recomeçou: convidado volta pra luta
+  },
   end: m => endRound(m.w < 0 ? -1 : 1 - m.w, m.text, true),
   s: m => { remote.push(m); if (m.tm !== undefined && !S.host) S.timer = m.tm; },
   hit: m => { // apanhei: eu resolvo (esquiva perfeita/invencível na MINHA tela vale)
@@ -163,17 +237,19 @@ const NET = {
   left: () => goOffline('O oponente saiu.'),
   close: () => S.online || net ? goOffline('Conexão perdida.') : null,
 };
-$('online').onclick = () => {
+function connect() {
   sfx.unlock();
   const code = ($('room').value.trim() || Math.random().toString(36).slice(2, 6)).toUpperCase();
   $('room').value = code;
   net?.close();
   netStatus('Conectando...');
   net = new Net(code, NET);
-};
+}
 
 function startMatch() {
+  T.hp = HP[settings.fightLen] || HP.normal;
   setCharacters(); // bot sorteia outro personagem a cada partida
+  makePips();
   S.wins = [0, 0];
   S.round = 1;
   startRound();
@@ -187,7 +263,7 @@ function startRound() {
   bot.reset(Math.PI);
   remote.buf.length = 0;
   while (projs.length) removeProj(0, false);
-  Object.assign(S, { state: 'intro', stateT: 0, timer: 99, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
+  Object.assign(S, { state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
   banner(`ROUND ${S.round}`);
   sfx.bell();
   updatePips();
@@ -214,42 +290,25 @@ function updateState(dt) {
   if (S.state === 'ko') {
     S.timeScale = S.stateT < 1.2 ? 0.3 : 1; // câmera lenta no K.O.
     if (S.stateT > 3.2) {
-      if (Math.max(...S.wins) >= 2) {
+      if (Math.max(...S.wins) >= winsNeeded()) {
         S.state = 'over';
         document.exitPointerLock();
-        showMenu();
+        showOver();
       } else if (!S.online || S.host) { S.round++; startRound(); } // convidado espera o 'round' do host
     }
   }
 }
 
-// ---------- menu / pointer lock ----------
-function showMenu() {
-  const playing = PLAYING.includes(S.state);
-  $('menuTitle').textContent = S.state === 'over' ? (S.wins[0] > S.wins[1] ? 'VOCÊ VENCEU!' : 'VOCÊ PERDEU!') : playing ? (S.online ? 'ONLINE' : 'PAUSADO') : 'TROCAÇÃO';
-  $('play').textContent = playing ? (S.online ? 'VOLTAR PRA LUTA' : 'CONTINUAR') : S.state === 'over' ? (S.online && !S.host ? 'ESPERANDO O HOST' : 'JOGAR DE NOVO') : S.online ? 'ENTRAR NA LUTA' : 'JOGAR';
-  $('menu').classList.remove('hidden');
-}
-document.addEventListener('pointerlockchange', () => (input.locked ? $('menu').classList.add('hidden') : showMenu()));
-$('play').onclick = () => {
-  sfx.unlock();
-  if (S.online) {
-    // online não pausa: só trava o mouse de novo. O host recomeça a partida no fim.
-    if (S.host && S.state === 'over') { S.wins = [0, 0]; S.round = 1; startRound(); }
-  } else if (!PLAYING.includes(S.state)) startMatch();
-  if (settings.fs && !document.fullscreenElement) {
-    // tela cheia + keyboard lock deixa usar Ctrl sem o navegador roubar (Ctrl+W etc.)
-    document.documentElement.requestFullscreen?.().then(() => navigator.keyboard?.lock?.()).catch(() => {});
-  }
-  const r = canvas.requestPointerLock({ unadjustedMovement: true });
-  r?.catch?.(() => canvas.requestPointerLock()?.catch?.(() => {}));
-};
-
 // tela cheia: F11 ou Alt+Enter entram/saem a qualquer hora (com o keyboard lock o navegador não deixa o Esc
 // sair rápido; o Esc fica só pra pausar)
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen?.();
-  else document.documentElement.requestFullscreen?.().then(() => navigator.keyboard?.lock?.()).catch(() => {});
+  else enterFullscreen();
+}
+// keyboard lock só nas teclas usadas no jogo (Ctrl+W não fecha a aba no meio da luta); Alt+Tab, Win etc. continuam livres
+function enterFullscreen() {
+  const keys = [...new Set(Object.values(settings.binds).flat())].filter(c => c && !c.startsWith('Mouse'));
+  return (document.documentElement.requestFullscreen?.() || Promise.reject()).then(() => navigator.keyboard?.lock?.(keys)).catch(() => {});
 }
 addEventListener('keydown', e => {
   if (e.code === 'F11' || (e.code === 'Enter' && e.altKey)) {
@@ -303,9 +362,9 @@ function updateHUD(dt) {
   $('skR').classList.toggle('ready', player.meter >= T.costR);
   // aviso do E: aparece quando um golpe vem; verde = agora é esquiva perfeita
   const th = threat(), now = S.state === 'fight' && player.perfectWindow(enemy);
-  $('dodgeKey').classList.toggle('show', now || (!!th && th.k > 0.3) || player.incoming > 0);
+  $('dodgeKey').classList.toggle('show', settings.dodgeHint && (now || (!!th && th.k > 0.3) || player.incoming > 0));
   $('dodgeKey').classList.toggle('now', now);
-  hud.timer.textContent = Math.ceil(S.timer);
+  hud.timer.textContent = Number.isFinite(S.timer) ? Math.ceil(S.timer) : '∞';
   dashPips.forEach((el, i) => {
     const k = i < player.charges ? 1 : i === player.charges ? player.rechargeT / T.dashRecharge : 0;
     el.style.transform = `scaleY(${k})`;
@@ -350,7 +409,7 @@ function threat() {
 }
 const _cam = new THREE.Vector3();
 function updateWarning() {
-  const th = threat();
+  const th = settings.warnings ? threat() : null;
   const ring = $('warnRing'), lbl = $('warnText'), mark = $('mark');
   ring.style.opacity = lbl.style.opacity = th ? 1 : 0;
   if (th) {
@@ -383,7 +442,7 @@ function updateWarning() {
 }
 
 // ---------- câmera: trancos e zoom com mola ----------
-function camKick(pitch, yaw, roll) { S.kpv += pitch * 16; S.kyv += yaw * 16; S.krv += roll * 16; }
+function camKick(pitch, yaw, roll) { const k = 16 * settings.shake; S.kpv += pitch * k; S.kyv += yaw * k; S.krv += roll * k; }
 function camZoom(df) { S.kzv += df * 14; }
 function springs(dt) {
   for (const k of ['kp', 'ky', 'kr', 'kz']) {
@@ -396,7 +455,8 @@ function springs(dt) {
 // Quem joga simula a bola e decide se acertou (online, manda 'hit' com kind 'proj').
 // Defesa reduz o dano, E na hora certa esquiva perfeito, e PARRY rebate a bola de volta.
 const projs = [];
-const projGeo = new THREE.SphereGeometry(0.22, 16, 12), glowGeo = new THREE.SphereGeometry(0.42, 16, 12);
+const projGeo = new THREE.SphereGeometry(0.2, 16, 12), glowGeo = new THREE.SphereGeometry(0.34, 16, 12), sparkGeo = new THREE.SphereGeometry(0.05, 6, 4);
+const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const _pa = new THREE.Vector3(), _pb = new THREE.Vector3();
 function spawnProj(owner, net0) {
   const target = owner === player ? enemy : player;
@@ -410,27 +470,35 @@ function spawnProj(owner, net0) {
     if (S.online && owner === player) net.send({ t: 'fire', p: pos.toArray(), d: dir.toArray() });
   }
   const color = owner === player ? 0x7fd8ff : 0xff7a5c;
-  const mesh = new THREE.Mesh(projGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, depthWrite: false }));
-  mesh.add(glow);
+  // núcleo branco + casca colorida + halo + 3 faíscas orbitando; rastro sai em updateProjs
+  const mesh = new THREE.Mesh(projGeo, coreMat);
+  const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
+  const halo = fx.glow(color, 1.5, 0.75);
+  const sparks = [0, 1, 2].map(() => new THREE.Mesh(sparkGeo, coreMat));
+  mesh.add(glow, halo, ...sparks);
   mesh.position.copy(pos);
   scene.add(mesh);
-  projs.push({ owner, mesh, glow, color, vel: dir.multiplyScalar(T.projSpeed), life: 1.6, visual: !!net0, trailT: 0 });
+  fx.flash(pos, color, 1.4);
+  fx.ring(pos, color, 0.9);
+  projs.push({ owner, mesh, glow, halo, sparks, color, vel: dir.multiplyScalar(T.projSpeed), life: 1.6, visual: !!net0, trailT: 0 });
 }
 function removeProj(i, burst = true) {
   const p = projs[i];
-  if (burst) { fx.burst(p.mesh.position, p.color, 12, 6); fx.ring(p.mesh.position, p.color, 1.2); }
+  if (burst) fx.explode(p.mesh.position.clone(), p.color);
   scene.remove(p.mesh);
-  p.mesh.material.dispose();
   p.glow.material.dispose();
+  p.halo.material.dispose();
   projs.splice(i, 1);
 }
 function updateProjs(dt) {
   for (let i = projs.length - 1; i >= 0; i--) {
     const p = projs[i], m = p.mesh;
     m.position.addScaledVector(p.vel, dt);
-    p.glow.scale.setScalar(1 + Math.sin(performance.now() * 0.03) * 0.15);
-    if ((p.trailT -= dt) <= 0) { p.trailT = 0.03; fx.burst(m.position, p.color, 1, 1, 0.1); }
+    const t = performance.now() * 0.001;
+    p.glow.scale.setScalar(1 + Math.sin(t * 30) * 0.15);
+    p.halo.scale.setScalar(1.4 + Math.sin(t * 22) * 0.2);
+    p.sparks.forEach((s, j) => { const a = t * 14 + j * 2.1; s.position.set(Math.cos(a) * 0.42, Math.sin(a * 1.3) * 0.3, Math.sin(a) * 0.42); });
+    if ((p.trailT -= dt) <= 0) { p.trailT = 0.018; fx.puff(m.position, p.color, 0.6, 0.25); }
     const target = p.owner === player ? enemy : player;
     const pos = m.position;
     if ((p.life -= dt) <= 0 || pos.y < 0 || Math.hypot(pos.x, pos.z) > arena.R || arena.pillars.some(q => Math.hypot(pos.x - q.x, pos.z - q.z) < q.r + 0.2)) { removeProj(i); continue; }
@@ -450,12 +518,42 @@ function updateProjs(dt) {
       p.vel.negate().multiplyScalar(1.25);
       p.color = target === player ? 0x7fd8ff : 0xff7a5c;
       p.glow.material.color.set(p.color);
+      p.halo.material.color.set(p.color);
+      fx.flash(pos, 0x7fffe8, 2);
       p.life = 1.6;
       continue;
     }
     p.owner.gain(res === 'hit' ? 7 : 2);
     removeProj(i);
   }
+}
+
+// ---------- super: círculo mágico, coluna de luz, aura ----------
+const PURPLE = 0xb06bff;
+function flashScreen(a, color = '#fff') {
+  const el = $('flash');
+  el.style.background = color;
+  el.animate([{ opacity: a }, { opacity: 0 }], { duration: 350, easing: 'ease-out' });
+}
+function superFx(f) {
+  f.superSeen = f.atk?.id;
+  fx.magicCircle(f, PURPLE, ATTACKS.super.windup + ATTACKS.super.active + 0.3);
+  fx.pillar(f.pos, PURPLE);
+  fx.groundRing(f.pos, PURPLE, 3.5);
+  fx.burst(f.pos.clone().setY(1), PURPLE, 18, 5);
+  flashScreen(f === player ? 0.35 : 0.2, '#e6ccff');
+}
+function updateAuras(sim) {
+  for (const f of [player, enemy]) {
+    const a = f.atk, on = a?.kind === 'super' && a.phase !== 'recovery';
+    if (on && f.remote && f.superSeen !== a.id) superFx(f); // oponente online não gera o evento aqui
+    if (on && (f.auraT = (f.auraT || 0) - sim) <= 0) {
+      f.auraT = 0.02;
+      fx.aura(f, PURPLE);
+      if (a.phase === 'active') fx.ghost(f, PURPLE);
+    }
+  }
+  document.body.classList.toggle('charging', player.atk?.kind === 'super' && player.atk.phase === 'windup');
 }
 
 // ---------- eventos de gameplay -> juice ----------
@@ -469,9 +567,9 @@ function handleEvents() {
         S.hitstop = Math.max(S.hitstop, sup ? 0.2 : heavy ? 0.11 : 0.055);
         fx.burst(e.point, sup ? 0xb06bff : heavy ? 0xffd23f : 0xffffff, sup ? 30 : heavy ? 16 : 9, sup ? 14 : heavy ? 9 : 6);
         fx.starBurst(e.point, sup ? 1.4 : heavy ? 0.85 : 0.5, sup ? 0xb06bff : heavy ? 0xffd23f : 0xffffff);
-        if (sup) fx.ring(e.point, 0xb06bff, 4);
+        if (sup) { fx.explode(e.point, 0xb06bff, true); fx.groundRing(e.victim.pos, 0xb06bff, 6, 0.6); flashScreen(mine ? 0.6 : 0.4, '#e6ccff'); }
         sfx.hit(heavy, mine ? 1 : 0.85);
-        popText(e.point, e.dmg, heavy ? 'big' : '');
+        if (settings.dmgNumbers) popText(e.point, e.dmg, heavy ? 'big' : '');
         if (e.counter) popText(e.point.clone().setY(e.point.y + 0.7), 'CONTRA-ATAQUE!', 'big cyan');
         if (e.combo >= 2) popText(e.point.clone().setY(e.point.y + 0.5), `${e.combo} HITS!`, 'small combo');
         S.trauma = Math.min(1, S.trauma + (mine ? (sup ? 1 : heavy ? 0.75 : 0.4) : sup ? 0.6 : heavy ? 0.3 : 0.12));
@@ -489,8 +587,7 @@ function handleEvents() {
         break;
       case 'superStart':
         sfx.guardBreak(v);
-        fx.ring(e.f.pos.clone().setY(0.2), 0xb06bff, 3);
-        fx.burst(e.f.pos.clone().setY(1), 0xb06bff, 18, 5);
+        superFx(e.f);
         popText(e.f.pos.clone().setY(e.f.pos.y + 2.2), 'SUPER!', 'big orange');
         S.trauma = Math.min(1, S.trauma + 0.25);
         arena.hype(0.5);
@@ -584,7 +681,7 @@ function updateCamera(dt, now) {
   const bob = Math.abs(Math.sin(f.walkPhase)) * 0.045 * walk;
   // tremida "orgânica": várias senoides em frequências que não se repetem (parece ruído), mais rotação que posição
   S.trauma = Math.max(0, S.trauma - dt * 1.5);
-  const sh = S.trauma * S.trauma, t = now * 0.001;
+  const sh = S.trauma * S.trauma * settings.shake, t = now * 0.001;
   const n = (a, b, c) => Math.sin(t * a) * 0.5 + Math.sin(t * b + 1.7) * 0.3 + Math.sin(t * c + 4.1) * 0.2;
   const shX = n(23, 41, 67) * 0.045 * sh + S.ky, shY = n(29, 37, 71) * 0.04 * sh + S.kp, shR = n(17, 31, 53) * 0.05 * sh + S.kr;
 
@@ -615,23 +712,26 @@ player.reset(new THREE.Vector3(0, 0, 7), 0);
 enemy.reset(new THREE.Vector3(0, 0, -7), Math.PI);
 
 // ?debug no endereço expõe o estado pra testes no console
-if (location.search.includes('debug')) window.game = { S, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
+if (location.search.includes('debug')) window.game = { S, menu, settings, fx, spawnProj, superFx, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
 
 // resolução adaptativa: se o frame passa de ~20ms por um tempo, baixa a resolução interna; se sobra, sobe
-const MAX_PR = Math.min(devicePixelRatio, 2);
-let pr = MAX_PR, frameAvg = 16, resT = 0;
+const maxPR = () => Math.min(devicePixelRatio, 2) * settings.resScale;
+let pr = 1, frameAvg = 16, resT = 0;
 function adaptRes(dt) {
+  if (!settings.autoRes) return;
   frameAvg += (dt * 1000 - frameAvg) * 0.05;
   if ((resT += dt) < 2) return;
   const want = frameAvg > 20 ? pr - 0.25 : frameAvg < 13 ? pr + 0.25 : pr;
-  const next = clamp(want, 0.6, MAX_PR);
+  const next = clamp(want, 0.5, maxPR());
   if (next !== pr) { pr = next; renderer.setPixelRatio(pr); resize(); }
   resT = 0;
 }
 
-let last = performance.now();
+let last = performance.now(), fpsN = 0, fpsT = 0;
 function loop(now) {
-  requestAnimationFrame(loop);
+  applySettings();
+requestAnimationFrame(loop);
+  if (settings.showFps && (fpsN++, (fpsT += (now - last) / 1000) >= 0.5)) { $('fps').textContent = Math.round(fpsN / fpsT) + ' FPS'; fpsN = fpsT = 0; }
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const playing = PLAYING.includes(S.state);
@@ -657,6 +757,7 @@ function loop(now) {
         separate(player, enemy);
       }
       updateProjs(sim);
+      updateAuras(sim);
     }
     if (S.online && (S.netT -= dt) <= 0) {
       S.netT = 1 / 30;
@@ -704,4 +805,5 @@ function loop(now) {
   document.body.classList.toggle('ingame', playing);
   renderer.render(scene, camera);
 }
+applySettings();
 requestAnimationFrame(loop);

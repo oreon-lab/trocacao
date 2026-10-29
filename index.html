@@ -91,31 +91,79 @@
   .pop.cyan { color: #7fffe8; }
   .pop.orange { color: #ff8a3d; }
 
-  /* menu */
-  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle, rgba(22,18,31,.25), rgba(22,18,31,.7)); }
+  /* ===== telas (menu) ===== */
+  #menu { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at 30% 40%, rgba(22,18,31,.15), rgba(22,18,31,.72)); }
   #menu.hidden { display: none; }
-  .panel { width: min(860px, 94vw); max-height: 94vh; overflow: auto; background: #fff6e0; color: var(--ink); border: 5px solid var(--ink); border-radius: 18px; box-shadow: 10px 10px 0 var(--ink); padding: 24px 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 32px; }
-  h1 { grid-column: 1 / -1; margin: 0; text-align: center; font-size: 92px; line-height: 1; color: var(--y); -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; text-shadow: 6px 6px 0 var(--ink); transform: rotate(-2deg); }
-  #play { grid-column: 1 / -1; justify-self: center; font: inherit; font-size: 44px; padding: 6px 48px; color: #fff; background: var(--e); border: 5px solid var(--ink); border-radius: 14px; box-shadow: 6px 6px 0 var(--ink); cursor: pointer; letter-spacing: 2px; }
-  #play:hover { transform: translate(-2px, -2px); box-shadow: 8px 8px 0 var(--ink); }
-  #play:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 var(--ink); }
-  .online { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; }
-  #room { font: inherit; font-size: 22px; width: 190px; padding: 4px 10px; text-align: center; text-transform: uppercase; border: 4px solid var(--ink); border-radius: 10px; }
-  #online { font: inherit; font-size: 24px; padding: 4px 20px; color: #fff; background: #3fa7ff; border: 4px solid var(--ink); border-radius: 10px; box-shadow: 4px 4px 0 var(--ink); cursor: pointer; }
-  #netStatus { width: 100%; text-align: center; font-family: system-ui, sans-serif; font-size: 13px; font-weight: 700; }
-  h2 { margin: 6px 0 4px; font-size: 28px; letter-spacing: 1px; }
-  .row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-family: system-ui, sans-serif; font-size: 14px; font-weight: 600; }
-  .row label { min-width: 110px; }
-  .row input[type=range] { flex: 1; accent-color: var(--e); }
-  .diff { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
-  .panel > div { min-width: 0; }
-  .diff button { font: inherit; font-size: 20px; padding: 2px 14px; border: 3px solid var(--ink); border-radius: 8px; background: #fff; cursor: pointer; }
-  .diff button.on { background: var(--y); }
-  table { width: 100%; border-collapse: collapse; font-family: system-ui, sans-serif; font-size: 13px; }
-  td { padding: 3px 4px; border-bottom: 2px dashed #e4d3ad; }
-  td:first-child { white-space: nowrap; font-weight: 800; }
-  kbd { display: inline-block; padding: 0 6px; border: 2px solid var(--ink); border-bottom-width: 3px; border-radius: 5px; background: #fff; font-family: inherit; font-size: 12px; }
-  @media (max-width: 720px) { .panel { grid-template-columns: 1fr; } h1 { font-size: 64px; } }
+  .screen { display: none; width: min(980px, 94vw); max-height: 94vh; color: var(--ink); animation: screenIn .22s ease-out; }
+  .screen.on { display: block; }
+  @keyframes screenIn { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+  .card { background: #fff6e0; border: 5px solid var(--ink); border-radius: 20px; box-shadow: 10px 10px 0 var(--ink); padding: 22px 28px; max-height: 94vh; overflow: auto; }
+  .card.narrow { width: min(560px, 94vw); margin: 0 auto; }
+  .title { margin: 0 0 14px; font-size: 54px; line-height: 1; text-align: center; color: var(--y); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; text-shadow: 5px 5px 0 var(--ink); transform: rotate(-1.5deg); }
+  [data-screen=home] { text-align: center; }
+  .logo { margin: 0; font-size: clamp(80px, 13vw, 150px); line-height: .9; color: var(--y); -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; text-shadow: 9px 9px 0 var(--ink); transform: rotate(-3deg); animation: logoIn .6s cubic-bezier(.2,1.6,.4,1); }
+  @keyframes logoIn { from { transform: rotate(-12deg) scale(.4); opacity: 0; } }
+  .tag { margin: 6px 0 26px; font-size: 26px; color: #fff; letter-spacing: 2px; -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; text-shadow: 3px 3px 0 var(--ink); }
+  .stack { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .big, .btn { font: inherit; color: var(--ink); background: #fff; border: 5px solid var(--ink); border-radius: 16px; box-shadow: 6px 6px 0 var(--ink); cursor: pointer; letter-spacing: 2px; transition: transform .08s, box-shadow .08s; }
+  .big { font-size: 38px; padding: 6px 0; width: min(380px, 80vw); }
+  .btn { font-size: 22px; padding: 4px 20px; border-width: 4px; box-shadow: 4px 4px 0 var(--ink); }
+  .big:hover, .btn:hover { transform: translate(-2px, -2px) rotate(-1deg); box-shadow: 8px 8px 0 var(--ink); }
+  .big:active, .btn:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 var(--ink); }
+  .big.red { background: var(--e); color: #fff; -webkit-text-stroke: 1.5px var(--ink); paint-order: stroke fill; }
+  .big.blue { background: var(--p); color: #fff; -webkit-text-stroke: 1.5px var(--ink); paint-order: stroke fill; }
+  .big.yellow { background: var(--y); }
+  .foot { margin-top: 22px; font: 700 13px system-ui, sans-serif; color: #fff; text-shadow: 1px 1px 0 var(--ink); opacity: .85; }
+  .actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  .hidden { display: none !important; }
+  .fighters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .fighter { font: inherit; color: var(--ink); background: #fff; border: 4px solid var(--ink); border-radius: 14px; box-shadow: 4px 4px 0 var(--ink); padding: 8px 8px 10px; cursor: pointer; display: flex; flex-direction: column; align-items: center; transition: transform .1s; }
+  .fighter img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 9px; background: linear-gradient(#bfe6ff, #fff3d6); }
+  .fighter b { font-size: 26px; margin-top: 6px; letter-spacing: 1px; }
+  .fighter span { font: 700 12px system-ui, sans-serif; opacity: .75; text-align: center; }
+  .fighter:hover { transform: translateY(-4px) rotate(-1deg); }
+  .fighter.on { background: var(--y); transform: translateY(-6px) rotate(-1.5deg); box-shadow: 6px 8px 0 var(--ink); }
+  .center { justify-content: center; }
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .lbl { font-size: 24px; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button, .tog, .key { font: inherit; font-size: 19px; padding: 2px 14px; color: var(--ink); background: #fff; border: 3px solid var(--ink); border-radius: 9px; cursor: pointer; box-shadow: 2px 2px 0 var(--ink); }
+  .seg button.on { background: var(--y); }
+  .tog { min-width: 130px; background: #e9e2d2; }
+  .tog.on { background: #5dff7a; }
+  .tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .tabs button { font: inherit; font-size: 24px; padding: 4px 22px; background: #fff; color: var(--ink); border: 4px solid var(--ink); border-radius: 12px 12px 4px 4px; cursor: pointer; box-shadow: 3px 3px 0 var(--ink); }
+  .tabs button.on { background: var(--e); color: #fff; -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill; transform: translateY(-3px); }
+  #setBody { min-height: 300px; }
+  .set { display: grid; grid-template-columns: 1fr minmax(240px, 1fr); align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 2px dashed #e4d3ad; }
+  .set label { font: 800 15px system-ui, sans-serif; }
+  .set small, .binds-foot small { display: block; font: 600 12px system-ui, sans-serif; opacity: .65; margin-top: 2px; }
+  .ctl { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+  .ctl input[type=range] { flex: 1; accent-color: var(--e); }
+  .ctl b { font-size: 20px; min-width: 52px; text-align: right; }
+  .binds-head, .bind { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 10px; align-items: center; }
+  .binds-head { font-size: 20px; padding: 0 4px 6px; border-bottom: 3px solid var(--ink); }
+  .bind { padding: 6px 4px; border-bottom: 2px dashed #e4d3ad; }
+  .bind label { font: 800 15px system-ui, sans-serif; }
+  .key { width: 100%; }
+  .key.wait { background: var(--y); animation: blink .5s infinite alternate; }
+  @keyframes blink { to { background: #fff; } }
+  .binds-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
+  .tips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .tip { background: #fff; border: 4px solid var(--ink); border-radius: 14px; box-shadow: 4px 4px 0 var(--ink); padding: 10px 14px 12px; }
+  .tip i { font-style: normal; font-size: 34px; }
+  .tip h3 { margin: 2px 0 4px; font-size: 26px; letter-spacing: 1px; }
+  .tip p { margin: 0; font: 600 13.5px/1.45 system-ui, sans-serif; }
+  kbd { display: inline-block; padding: 0 6px; border: 2px solid var(--ink); border-bottom-width: 3px; border-radius: 5px; background: #fff6e0; font: 700 12px system-ui, sans-serif; white-space: nowrap; }
+  .roomRow { display: flex; gap: 10px; justify-content: center; margin: 14px 0 8px; flex-wrap: wrap; }
+  #room { font: inherit; font-size: 30px; width: 220px; padding: 4px 10px; text-align: center; text-transform: uppercase; border: 4px solid var(--ink); border-radius: 12px; }
+  #netStatus { text-align: center; font: 700 14px system-ui, sans-serif; min-height: 20px; }
+  .note { font: 600 13px/1.4 system-ui, sans-serif; text-align: center; opacity: .75; }
+  #fps { position: fixed; right: 10px; bottom: 8px; font: 700 13px monospace; color: #fff; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+  #flash { position: absolute; inset: 0; opacity: 0; background: #fff; }
+  #charge { position: absolute; inset: 0; opacity: 0; transition: opacity .2s; background: radial-gradient(circle, transparent 35%, rgba(176,107,255,.55) 100%); }
+  body.charging #charge { opacity: 1; }
+  @media (max-width: 760px) { .fighters { grid-template-columns: repeat(2, 1fr); } .tips { grid-template-columns: 1fr; } .set { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -143,57 +191,88 @@
   <div id="warnText"></div>
   <div id="mark"><span>!</span><b>➤</b></div>
   <div id="slow"></div>
+  <div id="charge"></div>
+  <div id="flash"></div>
   <div id="cross"></div>
   <div id="dodgeKey">E</div>
-  <div id="skills"><div id="skQ"><b>Q</b><span>ENERGIA 35</span></div><div id="skR"><b>R</b><span>SUPER 100</span></div></div>
+  <div id="skills"><div id="skQ"><b id="skQk">Q</b><span>ENERGIA 35</span></div><div id="skR"><b id="skRk">R</b><span>SUPER 100</span></div></div>
   <div id="dashes"></div>
   <div id="banner"></div>
   <div id="pops"></div>
 </div>
 
+<div id="fps"></div>
 <div id="menu">
-  <div class="panel">
-    <h1 id="menuTitle">TROCAÇÃO</h1>
-    <button id="play">JOGAR</button>
-    <div class="online">
-      <input id="room" maxlength="8" placeholder="CÓDIGO DA SALA" autocomplete="off">
-      <button id="online">ONLINE 1v1</button>
-      <div id="netStatus">Deixe o código vazio pra criar uma sala nova, ou digite o código do amigo.</div>
+  <section class="screen on" data-screen="home">
+    <h1 class="logo">TROCAÇÃO</h1>
+    <p class="tag">PANCADARIA 1v1 CARTOON</p>
+    <nav class="stack">
+      <button class="big red" data-go="select">JOGAR</button>
+      <button class="big blue" data-go="online">ONLINE 1v1</button>
+      <button class="big yellow" data-go="howto">COMO JOGAR</button>
+      <button class="big" data-go="settings">CONFIGURAÇÕES</button>
+    </nav>
+    <div class="foot">F11 ou Alt+Enter: tela cheia · Esc: pausa</div>
+  </section>
+
+  <section class="screen" data-screen="select">
+    <div class="card">
+      <h2 class="title">ESCOLHA SEU LUTADOR</h2>
+      <div id="fighters" class="fighters"></div>
+      <div class="row center"><span class="lbl">Dificuldade do bot</span><div class="seg" id="selDiff"></div></div>
+      <div class="actions"><button class="btn" data-back>VOLTAR</button><button class="big red" data-act="fight">LUTAR!</button></div>
     </div>
-    <div>
-      <h2>Configurações</h2>
-      <div class="row"><label>Personagem</label><div class="diff" id="chars"></div></div>
-      <div class="row"><label>Dificuldade</label>
-        <div class="diff"><button data-d="easy">Fácil</button><button data-d="normal">Normal</button><button data-d="hard">Difícil</button></div>
-      </div>
-      <div class="row"><label>Sensibilidade <b id="sensV"></b></label><input id="sens" type="range" min="0.2" max="3" step="0.05"></div>
-      <div class="row"><label>FOV <b id="fovV"></b></label><input id="fov" type="range" min="65" max="105" step="1"></div>
-      <div class="row"><label>Volume</label><input id="vol" type="range" min="0" max="1" step="0.05"></div>
-      <div class="row"><input id="tps" type="checkbox"><label for="tps">Câmera em 3ª pessoa (V alterna)</label></div>
-      <div class="row"><input id="dbl" type="checkbox"><label for="dbl">Dash com toque duplo no WASD</label></div>
-      <div class="row"><input id="fs" type="checkbox"><label for="fs">Tela cheia (libera o Ctrl sem fechar a aba · F11 sai)</label></div>
+  </section>
+
+  <section class="screen" data-screen="online">
+    <div class="card narrow">
+      <h2 class="title">ONLINE 1v1</h2>
+      <p class="note">Deixe o código vazio e clique em <b>CONECTAR</b> pra criar uma sala nova. Manda o código pro seu amigo: ele digita e conecta. Cada um luta com o lutador escolhido em JOGAR.</p>
+      <div class="roomRow"><input id="room" maxlength="8" placeholder="CÓDIGO" autocomplete="off"><button class="btn" data-act="connect">CONECTAR</button></div>
+      <div id="netStatus"></div>
+      <div class="actions"><button class="btn" data-act="leaveOnline">VOLTAR</button><button class="big blue hidden" id="enterFight" data-act="enterFight">ENTRAR NA LUTA</button></div>
     </div>
-    <div>
-      <h2>Controles</h2>
-      <table>
-        <tr><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + mouse</td><td>Mover / mirar</td></tr>
-        <tr><td><kbd>Espaço</kbd></td><td>Pular (segure = mais alto)</td></tr>
-        <tr><td><kbd>Shift</kbd></td><td>Dash na direção do WASD (3 cargas, 1 no ar)</td></tr>
-        <tr><td><kbd>Ctrl</kbd> / <kbd>C</kbd></td><td>Agachar · correndo/dash + agachar = slide</td></tr>
-        <tr><td>Botão esq.</td><td>Soco rápido (alterna as mãos)</td></tr>
-        <tr><td>Botão dir.</td><td>Soco pesado (quebra defesa)</td></tr>
-        <tr><td><kbd>F</kbd></td><td>Defender · apertar na hora = PARRY</td></tr>
-        <tr><td><kbd>E</kbd></td><td>Esquivar · quando o E aparece verde = ESQUIVA PERFEITA (câmera lenta + contra-ataque)</td></tr>
-        <tr><td><kbd>Q</kbd></td><td>Bola de energia (35 de energia)</td></tr>
-        <tr><td><kbd>R</kbd></td><td>Super soco (barra cheia)</td></tr>
-        <tr><td>Dash + esq.</td><td>Investida</td></tr>
-        <tr><td>Slide + soco</td><td>Rasteira (lança; só defende agachado)</td></tr>
-        <tr><td><kbd>V</kbd></td><td>1ª / 3ª pessoa</td></tr>
-        <tr><td><kbd>Esc</kbd> / <kbd>P</kbd></td><td>Pausar</td></tr>
-        <tr><td><kbd>F11</kbd> / <kbd>Alt</kbd>+<kbd>Enter</kbd></td><td>Entrar/sair da tela cheia</td></tr>
-      </table>
+  </section>
+
+  <section class="screen" data-screen="howto">
+    <div class="card">
+      <h2 class="title">COMO JOGAR</h2>
+      <div class="tips" id="howtoBody"></div>
+      <div class="actions"><button class="btn" data-back>VOLTAR</button></div>
     </div>
-  </div>
+  </section>
+
+  <section class="screen" data-screen="settings">
+    <div class="card">
+      <h2 class="title">CONFIGURAÇÕES</h2>
+      <div class="tabs" id="setTabs"></div>
+      <div id="setBody"></div>
+      <div class="actions"><button class="btn" data-back>VOLTAR</button></div>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="pause">
+    <div class="card narrow">
+      <h2 class="title" id="pauseTitle">PAUSADO</h2>
+      <nav class="stack">
+        <button class="big red" data-act="resume">CONTINUAR</button>
+        <button class="big" data-go="settings">CONFIGURAÇÕES</button>
+        <button class="big yellow" data-go="howto">COMO JOGAR</button>
+        <button class="big" id="quitBtn" data-act="quit">SAIR PRO MENU</button>
+      </nav>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="over">
+    <div class="card narrow">
+      <h2 class="title" id="overTitle">VOCÊ VENCEU!</h2>
+      <p class="tag" id="overScore" style="text-align:center;color:var(--ink);-webkit-text-stroke:0;text-shadow:none"></p>
+      <nav class="stack">
+        <button class="big red" id="restartBtn" data-act="restart">JOGAR DE NOVO</button>
+        <button class="big" data-act="quit">MENU</button>
+      </nav>
+    </div>
+  </section>
 </div>
 
 <script type="importmap">
