@@ -70,6 +70,15 @@
   #mark.off span { display: none; }
   #mark.off.hot { background: none; border: none; box-shadow: none; }
   #mark.off.hot b { color: var(--c); font-size: 46px; }
+  /* trava de mira: 4 cantos girando em volta do peito do oponente */
+  #lock { position: absolute; left: 0; top: 0; width: 54px; height: 54px; opacity: 0; transition: opacity .12s; }
+  #lock.on { opacity: 1; }
+  #lock i { position: absolute; width: 16px; height: 16px; border: 4px solid #fff; filter: drop-shadow(0 0 0 var(--ink)) drop-shadow(2px 2px 0 var(--ink)); }
+  #lock i:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; }
+  #lock i:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; }
+  #lock i:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; }
+  #lock i:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+  #lock b { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px; border-radius: 50%; background: var(--e); box-shadow: 0 0 0 2px var(--ink); }
   .pop.combo { color: #fff; font-size: 24px; }
 
   #dashes { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); display: flex; gap: 6px; }
@@ -150,6 +159,7 @@
   @keyframes blink { to { background: #fff; } }
   .binds-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
   .tips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .tip:last-child:nth-child(3n+1) { grid-column: 1 / -1; }
   .tip { background: #fff; border: 4px solid var(--ink); border-radius: 14px; box-shadow: 4px 4px 0 var(--ink); padding: 10px 14px 12px; }
   .tip i { font-style: normal; font-size: 34px; }
   .tip h3 { margin: 2px 0 4px; font-size: 26px; letter-spacing: 1px; }
@@ -189,6 +199,7 @@
   </div>
   <div id="warnRing"></div>
   <div id="warnText"></div>
+  <div id="lock"><i></i><i></i><i></i><i></i><b></b></div>
   <div id="mark"><span>!</span><b>➤</b></div>
   <div id="slow"></div>
   <div id="charge"></div>

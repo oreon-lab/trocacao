@@ -6,7 +6,7 @@ const pct = v => Math.round(v * 100) + '%';
 
 export const DEFAULT_SETTINGS = {
   char: 'Barbarian', diff: 'normal', fightLen: 'normal', roundTime: 99, rounds: 2,
-  tps: true, fov: 80, sens: 1, invertY: false, dbl: true, shake: 1, dmgNumbers: true, warnings: true, dodgeHint: true,
+  tps: true, lockPull: 1, fov: 80, sens: 1, invertY: false, dbl: true, shake: 1, dmgNumbers: true, warnings: true, dodgeHint: true,
   quality: 'high', shadows: true, autoRes: true, resScale: 1, particles: 1, crowd: true, showFps: false, fs: true,
   vol: 0.6, binds: structuredClone(DEFAULT_BINDS),
 };
@@ -24,6 +24,7 @@ const TABS = {
     { k: 'roundTime', label: 'Tempo do round', type: 'choice', opts: [[60, '60s'], [99, '99s'], [0, 'Sem limite']] },
     { k: 'rounds', label: 'Rounds pra vencer', type: 'choice', opts: [[1, '1'], [2, '2'], [3, '3']] },
     { k: 'tps', label: 'Câmera em 3ª pessoa', type: 'toggle' },
+    { k: 'lockPull', label: 'Força da trava de mira', type: 'range', min: 0.3, max: 2, step: 0.05, fmt: pct, hint: 'Quanto a câmera puxa pro oponente quando a mira está travada. O mouse ainda mexe.' },
     { k: 'fov', label: 'Campo de visão', type: 'range', min: 65, max: 105, step: 1, fmt: v => v + '°' },
     { k: 'sens', label: 'Sensibilidade do mouse', type: 'range', min: 0.2, max: 3, step: 0.05, fmt: v => v.toFixed(2) },
     { k: 'invertY', label: 'Inverter eixo Y do mouse', type: 'toggle' },
@@ -218,6 +219,7 @@ export function initMenu({ settings, save, onChange, characters, thumbs, actions
       ['💨', 'Esquiva perfeita', `${k('dodge')} esquiva pro lado. Quando um golpe vem, a tecla aparece do lado da mira: aperte quando ela ficar <b style="color:#20a83a">VERDE</b> = <b>ESQUIVA PERFEITA</b>: câmera lenta, invencível e o próximo golpe é um <b>contra-ataque</b> (+50% de dano).`],
       ['⚡', 'Energia e poderes', `A barra embaixo da vida enche batendo, apanhando, defendendo, com parry e esquiva perfeita. ${k('q')} solta uma <b>bola de energia</b> (35). ${k('r')} com a barra cheia: <b>SUPER SOCO</b> voador que quebra defesa.`],
       ['🎯', 'Dicas', `Soco rápido ganha do pesado, pesado ganha da defesa, defesa/parry ganha do rápido. Fique de olho no <b>brilho da mão</b> do oponente: amarelo = rápido, vermelho = pesado, roxo = super. ${k('view')} troca entre 1ª e 3ª pessoa.`],
+      ['🔒', 'Travar a mira', `${k('lock')} trava a câmera no oponente: você anda em volta dele e a câmera continua puxando pra ele (o mouse ainda ajusta). Aperte de novo pra soltar. Solta sozinha no K.O. ou se ele ficar muito longe.`],
     ].map(([icon, title, text]) => `<div class="tip"><i>${icon}</i><h3>${title}</h3><p>${text}</p></div>`).join('');
   }
 

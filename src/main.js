@@ -126,6 +126,32 @@ input.onToggleView = () => {
   settings.tps = S.tps = !S.tps;
   save();
 };
+// trava de mira (estilo Elden Ring): a câmera puxa pro oponente com mola, o mouse ainda ajusta
+input.onLock = () => {
+  if (!S.lockOn && !canLock()) return;
+  S.lockOn = !S.lockOn;
+  sfx.jump(0.6);
+};
+const canLock = () => S.state === 'fight' && !enemy.ko && !player.ko && player.pos.distanceTo(enemy.pos) < 30;
+const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+const _lk = new THREE.Vector3();
+function lockOnCamera(dt) {
+  if (S.lockOn && !canLock() && S.state !== 'intro') S.lockOn = false;
+  if (!S.lockOn) return;
+  // mira no peito do oponente a partir da câmera (em 3ª pessoa ela fica no ombro)
+  _lk.set(enemy.pos.x - camera.position.x, enemy.pos.y + enemy.height * 0.6 - camera.position.y, enemy.pos.z - camera.position.z);
+  const yawT = Math.atan2(-_lk.x, -_lk.z), pitchT = Math.atan2(_lk.y, Math.hypot(_lk.x, _lk.z)) - (S.tps ? 0.08 : 0);
+  const k = 1 - Math.exp(-7 * settings.lockPull * dt); // mola: segue rápido, mas não crava
+  input.yaw += wrap(yawT - input.yaw) * k;
+  input.pitch += (clamp(pitchT, -0.8, 0.8) - input.pitch) * k;
+}
+function updateLockMark() {
+  const el = $('lock');
+  el.classList.toggle('on', !!S.lockOn);
+  if (!S.lockOn) return;
+  _v.set(enemy.pos.x, enemy.pos.y + enemy.height * 0.6, enemy.pos.z).project(camera);
+  el.style.transform = `translate(${(_v.x * 0.5 + 0.5) * innerWidth}px, ${(-_v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-50%) rotate(${performance.now() * 0.12}deg)`;
+}
 const winsNeeded = () => (S.online ? 2 : settings.rounds);
 function makePips() {
   for (const id of ['pWins', 'eWins']) $(id).innerHTML = '<i></i>'.repeat(winsNeeded());
@@ -263,7 +289,7 @@ function startRound() {
   bot.reset(Math.PI);
   remote.buf.length = 0;
   while (projs.length) removeProj(0, false);
-  Object.assign(S, { state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
+  Object.assign(S, { lockOn: false, state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
   banner(`ROUND ${S.round}`);
   sfx.bell();
   updatePips();
@@ -377,6 +403,7 @@ function updateHUD(dt) {
   hud.hurt.style.opacity = Math.max(0, +hud.hurt.style.opacity - dt * 3);
   hud.cross.classList.toggle('hot', player.reach(enemy, ATTACKS.light) <= 0 && !enemy.ko);
   updateWarning();
+  updateLockMark();
   for (let i = pops.length - 1; i >= 0; i--) {
     const o = pops[i];
     o.t += dt;
@@ -772,6 +799,7 @@ requestAnimationFrame(loop);
     animDt = sim;
   } else if (!playing) animDt = dt;
 
+  if (running) lockOnCamera(dt); // pausado não puxa
   // a mira responde mesmo no hitstop (3ª pessoa: mira no ponto da cruz; 1ª pessoa: igual à câmera)
   if (S.tps && playing) tpsAim();
   else { player.input.yaw = input.yaw; player.input.pitch = input.pitch; }
