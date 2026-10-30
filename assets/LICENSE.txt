@@ -1,5 +1,7 @@
 Personagens: KayKit Adventurers 1.0 por Kay Lousberg (www.kaylousberg.com) — CC0 1.0
 https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0
+Personagens: KayKit Skeletons 1.0 por Kay Lousberg (www.kaylousberg.com) — CC0 1.0 (assets/kaykit/LICENSE_skeletons.txt)
+https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0
 
 Cenário: KayKit Dungeon Remastered 1.0 e KayKit Medieval Hexagon Pack 1.0 por Kay Lousberg (www.kaylousberg.com) — CC0 1.0
 https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0

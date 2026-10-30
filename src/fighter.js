@@ -34,7 +34,7 @@ export function segSeg(p1, q1, p2, q2, out) {
 }
 
 // até onde cada poder mira sozinho no oponente (terremoto é em volta, não precisa)
-const POWER_AIM = { super: T.superRange, charge: 13, blink: 12, meteor: 22, grab: T.grabRange };
+const POWER_AIM = { super: T.superRange, charge: 13, blink: 12, meteor: 22, grab: T.grabRange, daggers: 18, cage: 16, venom: 9 };
 
 // golpe crítico: muito mais dano e arremessa lá pra trás
 export const critDef = def => ({ ...def, dmg: def.dmg * T.critMul, knock: def.knock * T.critKnock, up: Math.max(def.up, 5), stun: def.stun * 1.4 });
@@ -64,7 +64,7 @@ export class Fighter {
       hp: T.hp, stunT: 0, blocking: false, blockT: 0,
       atk: null, queued: null, queueT: 0, hand: 1, flashT: 0, ko: false, // hand 1 -> 1º soco rápido = jab (esquerda)
       walkPhase: 0, landImpact: 0, comboN: 0, comboT: 0, tell: null,
-      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, grab: null, heldBy: null, thrown: null, grabCd: 0, power: null, powerT: 0,
+      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, grab: null, heldBy: null, thrown: null, grabCd: 0, power: null, powerT: 0, rootT: 0, poisonT: 0, poisonDps: 0, poisonBy: null,
     });
   }
 
@@ -81,6 +81,8 @@ export class Fighter {
       const d = a.def, dist = Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z);
       const left = a.phase === 'windup' ? d.windup - a.t + (d.hitDelay || 0) : a.phase === 'active' ? Math.max(0, (d.hitDelay || 0) - a.t) : 9;
       const near = d.aoe ? dist < d.radius + 0.5
+        : a.kind === 'whirl' ? dist < d.radius + 0.9
+        : a.kind === 'venom' ? (a.phase === 'windup' ? dist < 9 : dist < 2.5)
         : a.kind === 'blink' ? dist < 13
         : a.kind === 'charge' ? (a.phase === 'active' ? foe.inCone(this, d.range + d.speed * T.perfectWindow + 0.6, 0.5) > 0 : dist < 4)
         : foe.reach(this, d) < 0.9;
@@ -109,6 +111,14 @@ export class Fighter {
     this.counterT = Math.max(0, this.counterT - dt);
     this.incoming = Math.max(0, this.incoming - dt);
     this.flashT = Math.max(0, this.flashT - dt);
+    this.rootT = Math.max(0, this.rootT - dt); // preso pela Prisão de Ossos: não anda, não pula, não dá dash
+    if (this.poisonT > 0) { // Lâmina Venenosa: perde vida aos poucos
+      this.poisonT -= dt;
+      if (!this.ko && !this.remote) {
+        this.hp -= this.poisonDps * dt;
+        if (this.hp <= 0) { this.checkKO(); events.push({ type: 'poisonKO', f: this.poisonBy, victim: this }); }
+      }
+    }
     this.grabCd = Math.max(0, this.grabCd - dt);
     this.dashCd -= dt;
     this.sinceDash += dt;
@@ -132,7 +142,7 @@ export class Fighter {
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
     const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
     let wx = 0, wz = 0;
-    if (canAct) {
+    if (canAct && this.rootT <= 0) {
       wx = fx * I.mz + rx * I.mx;
       wz = fz * I.mz + rz * I.mx;
       const wl = Math.hypot(wx, wz);
@@ -148,7 +158,7 @@ export class Fighter {
 
     // agachar / slide (segurar agachar durante o dash = slide quando o dash acaba)
     if (!I.crouch) this.slideLock = false;
-    if (canAct && I.crouch && this.grounded && !this.sliding && !this.slideLock && this.dashT <= 0 && hs > T.slideMinSpeed) {
+    if (canAct && this.rootT <= 0 && I.crouch && this.grounded && !this.sliding && !this.slideLock && this.dashT <= 0 && hs > T.slideMinSpeed) {
       this.sliding = true;
       this.slideT = 0;
       const k = (hs + T.slideBoost) / hs;
@@ -169,7 +179,7 @@ export class Fighter {
 
     // esquiva (Q): desvio rápido pro lado (ou pra onde o WASD aponta). Na hora certa = ESQUIVA PERFEITA:
     // não gasta carga, fica invencível mais tempo, dá contra-ataque e energia.
-    if (I.dodge && canAct && this.dashCd <= 0) {
+    if (I.dodge && canAct && this.rootT <= 0 && this.dashCd <= 0) {
       const perfect = this.perfectWindow(foe);
       if (perfect || this.charges > 0) {
         I.dash = true;
@@ -186,7 +196,7 @@ export class Fighter {
     }
 
     // dash: direção do WASD (ou do toque duplo); sem direção = pra frente
-    if (I.dash && canAct && this.charges > 0 && this.dashCd <= 0 && (this.grounded || this.airDashes < 1)) {
+    if (I.dash && canAct && this.rootT <= 0 && this.charges > 0 && this.dashCd <= 0 && (this.grounded || this.airDashes < 1)) {
       let dx = I.dashX, dz = I.dashZ;
       if (!dx && !dz) { dx = I.mx; dz = I.mz; }
       if (!dx && !dz) dz = 1;
@@ -247,14 +257,14 @@ export class Fighter {
     }
 
     // pulo (coyote time + buffer + altura variável)
-    if (this.jumpBufT > 0 && this.coyoteT > 0 && canAct && this.dashT <= 0) {
+    if (this.jumpBufT > 0 && this.coyoteT > 0 && canAct && this.rootT <= 0 && this.dashT <= 0) {
       this.vel.y = T.jumpVel;
       this.grounded = false;
       this.coyoteT = this.jumpBufT = 0;
       this.jumpCutDone = false;
       this.sliding = false;
       events.push({ type: 'jump', f: this });
-    } else if (I.jump && !this.grounded && this.pos.y > 0.4 && this.airJumps < 1 && canAct && this.dashT <= 0 && !this.atk) {
+    } else if (I.jump && !this.grounded && this.pos.y > 0.4 && this.airJumps < 1 && canAct && this.rootT <= 0 && this.dashT <= 0 && !this.atk) {
       // pulo duplo: devolve o dash do ar (pula, dash, pula, dash)
       this.vel.y = T.doubleJumpVel;
       this.airJumps++;
@@ -310,7 +320,7 @@ export class Fighter {
         a.phase = 'active';
         a.t -= d.windup;
         events.push({ type: 'swing', f: this, kind: a.kind });
-        if (d.ranged) { a.hit = true; events.push({ type: 'fire', f: this }); } // solta a bola de energia
+        if (d.ranged) { a.hit = true; events.push({ type: 'fire', f: this, kind: a.kind }); } // solta a bola de energia
         if (a.kind === 'super') { // avança voando até o oponente (mira automática: vai nele mesmo fora da mira)
           const dd = foe ? (a.aim ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : this.inCone(foe, 7, 0.6)) : 0, f = this.forward(_d);
           const v = dd ? clamp((dd - 1.2) * 6, 4, 26) : 10;
@@ -324,9 +334,34 @@ export class Fighter {
         }
         if (a.kind === 'blink') this.blinkTo(foe, arena);
         if (d.aoe) { a.done = true; this.aoeHit(foe); }
+        if (a.kind === 'venom') { // Lâmina Venenosa: avança como um raio pro oponente (atravessa, invencível)
+          const tgt = a.aim && foe && !foe.ko;
+          this.dashDir.copy(tgt ? _d.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize() : this.forward(_d));
+          this.dashT = d.active;
+          this.invulnT = Math.max(this.invulnT, d.active + 0.05);
+          this.bounced = true; // não ricocheteia na parede
+        }
+        if (a.kind === 'whirl') a.tickT = 0;
+      }
+      if (a.kind === 'whirl' && a.phase === 'active' && this.atk === a) { // Roda de Ossos: gira indo atrás dele
+        if (foe && !foe.ko) {
+          const dx = foe.pos.x - this.pos.x, dz = foe.pos.z - this.pos.z, dd = Math.hypot(dx, dz);
+          if (dd > 1.1) { this.vel.x = dx / dd * d.speed; this.vel.z = dz / dd * d.speed; }
+        }
+        if ((a.tickT -= dt) <= 0) {
+          a.tickT += d.tick;
+          const last = a.t + d.tick > d.active;
+          this.spinHit(foe, last ? 'whirlEnd' : 'whirl');
+        }
+      }
+      if (a.kind === 'venom' && a.phase === 'active' && !a.hit && foe && !foe.ko && !foe.invuln && this.atk === a) {
+        if (Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 1.3 && Math.abs(foe.pos.y - this.pos.y) < 1.4) {
+          _hit.set(foe.pos.x, foe.pos.y + foe.height * 0.55, foe.pos.z);
+          this.land(foe, d);
+        }
       }
       if (a.phase === 'active') {
-        if (!a.hit && !a.done && !(d.hitDelay && a.t < d.hitDelay)) this.tryHit(foe);
+        if (!a.hit && !a.done && !(d.hitDelay && a.t < d.hitDelay) && a.kind !== 'whirl' && a.kind !== 'venom') this.tryHit(foe);
         if (a.kind === 'charge' && a.hit && a.t < d.active) { a.t = d.active; this.vel.x *= 0.2; this.vel.z *= 0.2; } // bateu: para
         if (this.atk && a.t >= d.active) { a.phase = 'recovery'; a.t -= d.active; }
       }
@@ -519,9 +554,18 @@ export class Fighter {
   }
 
   // acertou (_hit = ponto do impacto)
-  land(foe, def) {
+  // Roda de Ossos: um tick do giro acerta quem estiver em volta
+  spinHit(foe, kind) {
+    if (!foe || foe.ko || foe.invuln) return;
+    const r = ATTACKS.whirl.radius + T.radius;
+    if (Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) > r || foe.pos.y - this.pos.y > 1.6) return;
+    _hit.set(foe.pos.x, foe.pos.y + foe.height * 0.55, foe.pos.z);
+    this.land(foe, ATTACKS[kind], kind);
+  }
+
+  land(foe, def, kindOverride) {
     this.atk.hit = true;
-    const kind = this.atk.kind, point = _hit.clone();
+    const kind = kindOverride || this.atk.kind, point = _hit.clone();
     // contra-ataque depois de uma esquiva perfeita: golpe mais forte
     const mul = this.counterT > 0 ? T.counterMul : 1;
     if (mul > 1) { def = { ...def, dmg: def.dmg * mul, knock: def.knock * 1.3 }; this.counterT = 0; }
@@ -546,6 +590,7 @@ export class Fighter {
       if (up > 0) { this.vel.y = Math.max(this.vel.y, up); this.grounded = false; this.jumpCutDone = true; }
     };
 
+    if (def.root) this.rootT = Math.max(this.rootT, def.root); // espetos prendem até quem defende
     // investida do Cavaleiro: o escudo sagrado segura o que vem de frente
     if (this.atk?.def.armor && this.atk.phase !== 'recovery' && facing) {
       att.vel.x = -nx * 6;
@@ -596,6 +641,7 @@ export class Fighter {
     knock(fin ? 1.8 : 1, fin ? Math.max(def.up, 4) : air ? Math.max(def.up, 5.5) : def.up);
     if (fin) this.comboT = 0;
     this.gain(4);
+    if (def.poison) { this.poisonT = def.poison; this.poisonDps = def.poisonDps; this.poisonBy = att.atk !== undefined && att.gain ? att : this.poisonBy; }
     this.checkKO();
     return 'hit';
   }

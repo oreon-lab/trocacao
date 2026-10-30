@@ -1,5 +1,5 @@
 import { ACTIONS, DEFAULT_BINDS, keyName } from './input.js';
-import { T } from './config.js';
+import { T, SPECIALS } from './config.js';
 
 // Telas antes/durante o jogo: Início, Lutador, Online, Como jogar, Configurações, Pausa, Fim.
 const $ = id => document.getElementById(id);
@@ -56,6 +56,11 @@ const FIGHTER_INFO = {
   Knight: 'Lata reforçada. Bate e aguenta.',
   Rogue: 'Rápida no olho e na mão.',
   Mage: 'Trocou o cajado pela porrada.',
+  Rogue_Hooded: 'Ninguém vê o rosto. Todo mundo vê as adagas.',
+  Skeleton_Warrior: 'Já morreu uma vez. Não liga de apanhar.',
+  Skeleton_Mage: 'Prende você no chão e ri com o maxilar.',
+  Skeleton_Rogue: 'Rápido como um raio, venenoso como sempre.',
+  Skeleton_Minion: 'Nunca luta sozinho.',
 };
 
 export function initMenu({ settings, save, onChange, characters, thumbs, actions }) {
@@ -98,7 +103,7 @@ export function initMenu({ settings, save, onChange, characters, thumbs, actions
     for (const [k, name] of Object.entries(characters)) {
       const b = document.createElement('button');
       b.className = 'fighter' + (settings.char === k ? ' on' : '');
-      b.innerHTML = `<img src="${thumbs[k] || ''}" alt=""><b>${name}</b><span>${FIGHTER_INFO[k] || ''}</span>`;
+      b.innerHTML = `<img src="${thumbs[k] || ''}" alt=""><b>${name}</b><em style="background:#${(SPECIALS[k]?.color ?? 0).toString(16).padStart(6, '0')}">${SPECIALS[k]?.name || ''}</em><span>${FIGHTER_INFO[k] || ''}</span>`;
       b.onclick = () => { set('char', k); renderFighters(); };
       box.appendChild(b);
     }
@@ -221,7 +226,7 @@ export function initMenu({ settings, save, onChange, characters, thumbs, actions
       ['🛡️', 'Defesa e parry', `Segure ${k('block')} pra defender (toma só um pouquinho). Apertar <b>bem na hora</b> que o golpe chega é <b>PARRY</b>: o oponente fica atordoado. Parry numa bola de energia <b>rebate ela</b>.`],
       ['💨', 'Esquiva perfeita', `${k('dodge')} esquiva pro lado. Quando um golpe vem, a tecla aparece do lado da mira: aperte quando ela ficar <b style="color:#20a83a">VERDE</b> = <b>ESQUIVA PERFEITA</b>: câmera lenta, invencível e o próximo golpe é um <b>contra-ataque</b> (+50% de dano).`],
       ['⚡', 'Energia e poderes', `A barra embaixo da vida enche batendo, apanhando, defendendo, com parry e esquiva perfeita. ${k('q')} usa a <b>habilidade do seu lutador</b> (35). ${k('r')} com a barra cheia: <b>SUPER SOCO</b> voador que quebra defesa. Os poderes <b>miram sozinhos</b> no oponente; apertou no meio de um golpe, sai logo depois (e um soco que acertou emenda direto no poder). Os quadrinhos embaixo enchem até liberar; meio apagado = ele está longe demais pra esse poder.`],
-      ['✨', `Habilidades (${k('q')})`, `<b>Bárbaro — Terremoto:</b> pula e soca o chão, a onda derruba quem estiver perto (pule pra escapar). <b>Cavaleiro — Investida Sagrada:</b> avança com um escudo de luz que segura golpes de frente. <b>Ladina — Passo Sombrio:</b> some na fumaça e aparece atrás do oponente com uma facada. <b>Mago — Meteoro:</b> marca um círculo no chão e um meteoro cai ali (saia do círculo!).`],
+      ['✨', `Habilidades (${k('q')})`, `<b>Bárbaro — Terremoto:</b> pula e soca o chão, a onda derruba quem estiver perto (pule pra escapar). <b>Cavaleiro — Investida Sagrada:</b> avança com um escudo de luz que segura golpes de frente. <b>Ladina — Passo Sombrio:</b> some na fumaça e aparece atrás do oponente com uma facada. <b>Mago — Meteoro:</b> marca um círculo no chão e um meteoro cai ali (saia do círculo!). <b>Encapuzada — Leque de Adagas:</b> joga 3 facas girando em leque; cada uma atordoa (dá pra esquivar ou se esconder atrás de um pilar). <b>Ossudo — Roda de Ossos:</b> gira com a espada indo atrás de você e acerta várias vezes; o último giro quebra a defesa e arremessa (fuja ou bata nele pra parar). <b>Necromante — Prisão de Ossos:</b> um círculo roxo enche no chão e sobem espetos: quem ficar dentro fica <b>preso</b> sem andar. <b>Sombra — Lâmina Venenosa:</b> atravessa você como um raio com um corte que <b>envenena</b> (perde vida por uns segundos). <b>Lacaio — Exército de Ossos:</b> dois mini-esqueletos saem do chão e correm atrás de você; explodem ao encostar, mas um soco quebra cada um.`],
       ['🎯', 'Dicas', `Soco rápido ganha do pesado, pesado ganha da defesa, defesa/parry ganha do rápido. Fique de olho no <b>brilho da mão</b> do oponente: amarelo = rápido, vermelho = pesado, roxo = super. ${k('view')} troca entre 1ª e 3ª pessoa.`],
       ['🔒', 'Travar a mira', `${k('lock')} trava a câmera no oponente: você anda em volta dele e a câmera continua puxando pra ele (o mouse ainda ajusta). Aperte de novo pra soltar. Solta sozinha no K.O. ou se ele ficar muito longe.`],
     ].map(([icon, title, text]) => `<div class="tip"><i>${icon}</i><h3>${title}</h3><p>${text}</p></div>`).join('');

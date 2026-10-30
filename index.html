@@ -27,6 +27,8 @@
   .bar .trail { background: #fff; }
   .side.left .fill { background: linear-gradient(#7cc6ff, var(--p)); }
   .side.right .fill { background: linear-gradient(#ff8f86, var(--e)); }
+  .side .bar .fill.poison { background: linear-gradient(#b8ff8a, #3fbf2a); animation: poisonPulse .5s ease-in-out infinite alternate; }
+  @keyframes poisonPulse { to { filter: brightness(1.35); } }
   .wins { margin-top: 6px; }
   .wins i { display: inline-block; width: 18px; height: 18px; margin: 0 3px; border: 3px solid var(--ink); border-radius: 50%; background: #3a3246; }
   .wins i.on { background: var(--y); }
@@ -131,10 +133,11 @@
   .foot { margin-top: 22px; font: 700 13px system-ui, sans-serif; color: #fff; text-shadow: 1px 1px 0 var(--ink); opacity: .85; }
   .actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
   .hidden { display: none !important; }
-  .fighters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .fighters { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
   .fighter { font: inherit; color: var(--ink); background: #fff; border: 4px solid var(--ink); border-radius: 14px; box-shadow: 4px 4px 0 var(--ink); padding: 8px 8px 10px; cursor: pointer; display: flex; flex-direction: column; align-items: center; transition: transform .1s; }
   .fighter img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 9px; background: linear-gradient(#bfe6ff, #fff3d6); }
-  .fighter b { font-size: 26px; margin-top: 6px; letter-spacing: 1px; }
+  .fighter b { font-size: 22px; margin-top: 6px; letter-spacing: 1px; }
+  .fighter em { font: 900 10px system-ui, sans-serif; font-style: normal; letter-spacing: .5px; padding: 2px 6px; margin: 2px 0 3px; border: 2px solid var(--ink); border-radius: 6px; white-space: nowrap; }
   .fighter span { font: 700 12px system-ui, sans-serif; opacity: .75; text-align: center; }
   .fighter:hover { transform: translateY(-4px) rotate(-1deg); }
   .fighter.on { background: var(--y); transform: translateY(-6px) rotate(-1.5deg); box-shadow: 6px 8px 0 var(--ink); }

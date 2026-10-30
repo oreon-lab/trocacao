@@ -9,6 +9,7 @@ import { Net, snapshot, Remote } from './net.js';
 import { FX, sfx, audio } from './fx.js';
 import { initMenu, DEFAULT_SETTINGS } from './menu.js';
 import { createTutorial } from './tutorial.js';
+import { createPowers } from './powers.js';
 
 const $ = id => document.getElementById(id);
 
@@ -60,6 +61,11 @@ let fpRig;
 const input = new PlayerInput(canvas);
 const bot = new Bot();
 const fx = new FX(scene, camera);
+// adagas, Prisão de Ossos e mini-esqueletos (src/powers.js); embrulhos porque theme/vol/net vêm mais abaixo
+const powers = createPowers({
+  scene, fx, sfx, player, enemy, events, arena,
+  send: m => S.online && net?.send(m), pop: (p, t) => popText(p, t, 'small'), theme: f => theme(f), vol: f => vol(f),
+});
 
 // ---------- configurações (salvas no navegador) ----------
 const settings = structuredClone(DEFAULT_SETTINGS);
@@ -297,7 +303,7 @@ const NET = {
     player.gain(m.res === 'hit' ? 7 : m.res === 'break' ? 6 : m.res === 'block' ? 2 : 0);
     events.push({ type: m.res, f: player, victim: enemy, kind: m.kind, point: new THREE.Vector3(...m.p), dmg: m.dmg ?? def.dmg, combo: m.combo, crit: m.crit });
   },
-  fire: m => spawnMeteor(enemy, m), // meteoro do oponente (só visual; quem acerta é decidido por ele)
+  fire: m => (m.k ? powers.cast(m.k, enemy, m) : spawnMeteor(enemy, m)), // poder de longe do oponente (só visual; quem acerta é decidido por ele)
   left: () => goOffline('O oponente saiu.'),
   close: () => S.online || net ? goOffline('Conexão perdida.') : null,
 };
@@ -427,6 +433,7 @@ function updateHUD(dt) {
   S.trail[1] = enemy.hp < S.trail[1] ? damp(S.trail[1], enemy.hp, 3, dt) : enemy.hp;
   const pct = v => (v / T.hp) * 100 + '%';
   hud.pFill.style.width = pct(player.hp);
+  hud.pFill.classList.toggle('poison', player.poisonT > 0); hud.eFill.classList.toggle('poison', enemy.poisonT > 0);
   hud.eFill.style.width = pct(enemy.hp);
   hud.pTrail.style.width = pct(S.trail[0]);
   hud.eTrail.style.width = pct(S.trail[1]);
@@ -484,6 +491,8 @@ const WARN = {
   super: ['#b06bff', 'SUPER! ESQUIVA!'],
   slam: ['#ff7a2f', 'PULE!'], charge: ['#ffd23f', 'ESQUIVA!'], blink: ['#a05cff', 'ATRÁS DE VOCÊ!'],
   meteor: ['#4fc8ff', 'METEORO!'], meteorHit: ['#ff6a2f', 'SAIA DO CÍRCULO!'],
+  daggers: ['#3fe0b0', 'ADAGAS! ESQUIVA!'], whirl: ['#f2e6c4', 'SAIA DE PERTO!'], cage: ['#b46bff', 'PRISÃO! SAIA!'],
+  venom: ['#7dff4a', 'VENENO! ESQUIVA!'], summon: ['#ffe14d', 'ESQUELETOS!'],
 };
 function threat() {
   const e = enemy, p = player;
@@ -494,7 +503,7 @@ function threat() {
   if (e.atk?.phase === 'windup') return { kind: e.atk.kind, k: e.atk.t / e.atk.def.windup };
   if (e.sliding && d < 6) return { kind: 'sweep', k: clamp(1 - (d - 2) / 4, 0, 1) };
   const toward = (e.vel.x * dx + e.vel.z * dz) / (d || 1);
-  if (e.dashT > 0 && d < 9 && toward > 10) return { kind: 'lunge', k: clamp(1 - (d - 2.5) / 6, 0, 1) };
+  if (e.dashT > 0 && d < 9 && toward > 10 && e.atk?.kind !== 'venom') return { kind: 'lunge', k: clamp(1 - (d - 2.5) / 6, 0, 1) };
   return null;
 }
 const _cam = new THREE.Vector3();
@@ -563,6 +572,7 @@ function spawnMeteor(owner, net0) {
 }
 function clearHazards() {
   hazards.length = 0; // os efeitos visuais terminam sozinhos
+  powers.clear();
   player.danger = enemy.danger = null;
 }
 function updateHazards(dt) {
@@ -617,6 +627,10 @@ function onAttackStart(f, a, col) {
     case 'charge': fx.crossFlash(chest(f), 1.5); fx.rays(chest(f), col, 12, 2.2); fx.groundRing(f.pos, col, 2.2); sfx.chime(v); break;
     case 'blink': f.blinkFrom = f.pos.clone(); fx.smoke(f.pos, col); sfx.poof(v); break;
     case 'meteor': fx.magicCircle(f, col, a.def.windup + 0.3); fx.pillar(f.pos, col); sfx.chime(v * 0.8); break;
+    case 'daggers': fx.burst(chest(f), col, 8, 3); sfx.swing(false, v); break;
+    case 'whirl': fx.groundRing(f.pos, col, a.def.radius, 0.3); fx.dust(f.pos, 6); sfx.swing(true, v); break;
+    case 'cage': case 'summon': fx.magicCircle(f, col, a.def.windup + 0.3); fx.groundRing(f.pos, col, 1.6, 0.4); sfx.chime(v * 0.8); break;
+    case 'venom': fx.groundRing(f.pos, col, 1.3, 0.25); fx.puff(chest(f), col, 0.8, 0.3); sfx.poof(v); break;
   }
 }
 function onAttackActive(f, a, col) {
@@ -637,12 +651,17 @@ function onAttackActive(f, a, col) {
       sfx.poof(v);
       break;
     case 'charge': sfx.dash(v); break;
+    case 'venom': fx.smoke(f.pos, col); sfx.dash(v); sfx.swing(true, v); break;
   }
 }
 // acerto das habilidades: cada uma com a sua cara
 function abilityHit(e, col) {
   if (e.kind === 'charge') { fx.holy(e.point, col); sfx.ding(vol(e.f)); }
   if (e.kind === 'blink') { fx.backstab(e.point, col); sfx.slash(vol(e.f)); }
+  if (e.kind === 'venom' || e.kind === 'daggerHit') { fx.slash(e.point, col, Math.random() * 3, e.kind === 'venom' ? 2.6 : 1.6); sfx.slash(vol(e.f)); }
+  if (e.kind === 'venom') popText(e.point.clone().setY(e.point.y + 0.9), 'ENVENENADO!', 'big', col);
+  if (e.kind === 'cageHit') popText(e.point.clone().setY(e.point.y + 0.9), 'PRESO!', 'big', col);
+  if (e.kind === 'whirlEnd') { fx.explode(e.point, col, false); fx.rocks(e.point, 6, 4, 0xf2ead2, 0.12, 5); }
 }
 function watchAttacks(sim) {
   for (const f of [player, enemy]) {
@@ -662,6 +681,16 @@ function watchAttacks(sim) {
       if (a.kind === 'super' && a.phase !== 'recovery') { fx.aura(f, col); if (a.phase === 'active') fx.ghost(f, col); }
       if (a.kind === 'meteor' && a.phase === 'windup') fx.aura(f, col);
       if (a.kind === 'slam' && a.phase === 'windup') fx.aura(f, col);
+      if ((a.kind === 'cage' || a.kind === 'summon') && a.phase === 'windup') fx.aura(f, col);
+      if (a.kind === 'venom' && a.phase === 'active') { fx.ghost(f, col); fx.puff(chest(f), col, 0.4, 0.3); }
+      if (a.kind === 'whirl' && a.phase === 'active') { // Roda de Ossos: rastro girando + vush a cada volta
+        fx.ghost(f, col);
+        const ang = a.t * 22, r = a.def.radius * 0.8;
+        fx.puff(new THREE.Vector3(f.pos.x + Math.cos(ang) * r, f.pos.y + 1, f.pos.z + Math.sin(ang) * r), col, 0.35, 0.25);
+        if (f.grounded) fx.dust(f.pos, 1);
+        const turn = Math.floor(a.t / a.def.tick);
+        if (turn !== f.whirlTurn) { f.whirlTurn = turn; sfx.swing(true, vol(f)); fx.slash(chest(f), col, turn * 2.1, a.def.radius * 1.7, 0.3); }
+      }
       if (charging && a.phase === 'active' && !a.hit) {
         fx.ghost(f, col);
         fx.puff(new THREE.Vector3(f.pos.x + (Math.random() - 0.5) * 0.6, f.pos.y + 0.3 + Math.random() * 1.2, f.pos.z + (Math.random() - 0.5) * 0.6), col, 0.5, 0.35);
@@ -717,8 +746,8 @@ function handleEvents() {
         abilityHit(e, col);
         sfx.hit(heavy, mine ? 1 : 0.85);
         // quem apanha geme (sempre no pesado, às vezes no rápido); o K.O. tem grito de dor
-        if (e.victim.ko) sfx.pain(e.victim.char === 'Rogue', vol(e.victim));
-        else if ((heavy || e.combo >= 3 ? 0.75 : 0.25) > Math.random() && clock() - (e.victim.gruntT || 0) > 0.35) { e.victim.gruntT = clock(); sfx.grunt(e.victim.char === 'Rogue', vol(e.victim)); }
+        if (e.victim.ko) sfx.pain(e.victim.char.startsWith('Rogue'), vol(e.victim));
+        else if ((heavy || e.combo >= 3 ? 0.75 : 0.25) > Math.random() && clock() - (e.victim.gruntT || 0) > 0.35) { e.victim.gruntT = clock(); sfx.grunt(e.victim.char.startsWith('Rogue'), vol(e.victim)); }
         if (settings.dmgNumbers) popText(e.point, e.dmg, heavy ? 'big' : '');
         if (e.crit) {
           popText(e.point.clone().setY(e.point.y + 0.9), 'CRÍTICO!', 'big orange');
@@ -745,7 +774,7 @@ function handleEvents() {
         if (e.f === player) sfx.voice('perfect');
         if (e.f === player) { if (!S.online) S.slowT = 0.55; camZoom(6); }
         break;
-      case 'fire': spawnMeteor(e.f); break;
+      case 'fire': if (powers.has(e.kind)) powers.cast(e.kind, e.f); else spawnMeteor(e.f); break;
       case 'blink': // a Ladina apareceu atrás: a câmera do jogador gira rápido pro oponente
         if (e.f === player) {
           S.turn = wrap(Math.atan2(-(enemy.pos.x - player.pos.x), -(enemy.pos.z - player.pos.z)) - input.yaw);
@@ -949,7 +978,7 @@ player.reset(new THREE.Vector3(0, 0, 7), 0);
 enemy.reset(new THREE.Vector3(0, 0, -7), Math.PI);
 
 // ?debug no endereço expõe o estado pra testes no console
-if (location.search.includes('debug')) window.game = { tutorial, renderer, S, arena, bot, startMatch, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
+if (location.search.includes('debug')) window.game = { tutorial, renderer, S, arena, bot, startMatch, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera, powers, loop: t => loop(t) };
 
 // resolução adaptativa: se o frame passa de ~20ms por um tempo, baixa a resolução interna; se sobra, sobe
 const maxPR = () => Math.min(devicePixelRatio, 2) * settings.resScale;
@@ -968,7 +997,7 @@ let last = performance.now(), fpsN = 0, fpsT = 0;
 function loop(now) {
   requestAnimationFrame(loop);
   if (settings.showFps && (fpsN++, (fpsT += (now - last) / 1000) >= 0.5)) { $('fps').textContent = Math.round(fpsN / fpsT) + ' FPS'; fpsN = fpsT = 0; }
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const dt = clamp((now - last) / 1000, 0, 0.05);
   last = now;
   const playing = PLAYING.includes(S.state);
   S.view3 = S.tps || !!(player.grab || player.heldBy || (player.thrown && !player.grounded)); // giro do furacão: 3ª pessoa
@@ -995,6 +1024,7 @@ function loop(now) {
         separate(player, enemy);
       }
       updateHazards(sim);
+      powers.update(sim);
       watchAttacks(sim);
     }
     if (S.online && (S.netT -= dt) <= 0) {

@@ -184,10 +184,18 @@ export class Bot {
       if (al < 1.2 && me.charges > 0 && Math.random() < dt * 4) { I.dash = true; I.dashX = I.mx; I.dashZ = I.mz; }
     }
 
+    // Roda de Ossos do oponente: foge pra trás (com dash se tiver colado)
+    if (foe.atk?.kind === 'whirl' && foe.atk.phase !== 'recovery' && dist < 4.5 && Math.random() < L.react + 0.3) {
+      I.mz = -1; I.mx = this.dir * 0.5;
+      if (dist < 2.8 && me.charges > 0 && Math.random() < dt * 5) { I.dash = true; I.dashX = I.mx; I.dashZ = -1; }
+    }
+
     // poderes: super quando a barra enche e o jogador tá perto; habilidade na distância em que ela funciona
     if (!me.atk && facing && me.stunT <= 0) {
       const sp = SPECIALS[me.char]?.kind;
-      const ok = sp === 'slam' ? dist < 4.2 && foe.grounded : sp === 'charge' ? dist > 2.5 && dist < 9 : sp === 'blink' ? dist > 3 && dist < 11 : dist > 4 && dist < 18;
+      const ok = sp === 'slam' ? dist < 4.2 && foe.grounded : sp === 'charge' ? dist > 2.5 && dist < 9 : sp === 'blink' ? dist > 3 && dist < 11
+        : sp === 'whirl' ? dist < 4.5 : sp === 'venom' ? dist > 2 && dist < 8 : sp === 'daggers' ? dist > 3 && dist < 16
+        : sp === 'cage' ? dist > 3 && dist < 14 && foe.rootT <= 0 : dist > 4 && dist < 18;
       // giro do furacão: colado, com energia e sem recarga
       if (L.grab && me.meter >= T.costG && me.grabCd <= 0 && dist < 3 && !foe.ko && Math.random() < dt * 4 * L.grab) I.grab = true;
       else if (me.meter >= T.costR && dist < 5 && Math.random() < dt * 1.5 * L.aggro) I.r = true;

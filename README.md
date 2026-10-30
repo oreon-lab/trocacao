@@ -26,6 +26,11 @@ Abra http://localhost:5173. O mesmo servidor entrega o jogo e faz o multiplayer 
   - **Cavaleiro — Investida Sagrada:** avança com um escudo de luz que segura golpes de frente.
   - **Ladina — Passo Sombrio:** some na fumaça e aparece atrás do oponente com uma facada.
   - **Mago — Meteoro:** marca um círculo no chão e um meteoro em chamas cai ali. Saia do círculo!
+  - **Encapuzada — Leque de Adagas:** 3 facas girando em leque (a faca do próprio modelo); cada uma atordoa. Pilar segura; dá pra esquivar.
+  - **Ossudo — Roda de Ossos:** gira ~1s indo atrás do oponente, acertando várias vezes; o último giro quebra a defesa e arremessa. Fuja ou acerte ele pra parar.
+  - **Necromante — Prisão de Ossos:** círculo roxo enche no chão (tempo pra sair) e sobem espetos de osso: quem ficou dentro fica **preso** 1,6s (não anda, não pula, não dá dash).
+  - **Sombra — Lâmina Venenosa:** atravessa o oponente como um raio (invencível) com um corte que **envenena** (perde vida por 4s; barra de vida fica verde).
+  - **Lacaio — Exército de Ossos:** 2 mini-esqueletos saem do chão e correm atrás do oponente; explodem ao encostar, mas um soco quebra cada um.
 - **Botão do meio do mouse / T** — trava a mira no oponente (ajuda leve; aparece um pontinho vermelho nele).
 - **F11** / **Alt+Enter** — tela cheia.
 
@@ -48,7 +53,8 @@ Como sincroniza: cada um simula o próprio lutador (zero atraso no seu movimento
 | `src/input.js` | Teclado/mouse → input abstrato |
 | `src/bot.js` | IA: gera o mesmo input que o jogador (fácil/normal/difícil) |
 | `src/rig.js` | Personagens KayKit + mistura de animações (corpo de cima/baixo) sincronizada com os golpes. Em 1ª pessoa, uma cópia só com os braços vai presa na câmera |
-| `assets/kaykit/` | Bárbaro, Cavaleiro, Ladina, Mago — KayKit Adventurers (Kay Lousberg, CC0) |
+| `assets/kaykit/` | Bárbaro, Cavaleiro, Ladina, Mago, Encapuzada — KayKit Adventurers; Ossudo, Necromante, Sombra, Lacaio — KayKit Skeletons (Kay Lousberg, CC0). Mesmo esqueleto de ossos, então todas as animações valem pra todos |
+| `src/powers.js` | O que as habilidades novas soltam na arena: adagas, Prisão de Ossos, mini-esqueletos, e o visual de preso/envenenado. Quem lança decide o acerto (online manda `hit`, igual ao meteoro) |
 | `assets/kaykit/extra_anims.glb` | Animações feitas no Blender pro rig KayKit: guarda/jab/direto de 1ª pessoa, uppercut (pesado) e as habilidades (Ground_Slam, Shield_Charge, Meteor_Call) |
 | `tools/fp_anims.py` | Gera o `extra_anims.glb`: `blender -b --factory-startup --python tools/fp_anims.py` (IK nas mãos sobre a Unarmed_Idle, assado quadro a quadro; imprime onde as mãos caem na tela) |
 | `check.html` | Folha de poses de cada personagem + checagem de pés/altura (`?c=Knight`) |

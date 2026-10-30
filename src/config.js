@@ -111,6 +111,21 @@ export const ATTACKS = {
   meteor: { windup: 0.4, active: 0.05, recovery: 0.35, ranged: true, special: true, moveMul: 0.4 },
   meteorHit: { dmg: 18, radius: 2.3, delay: 0.95, knock: 10, up: 7, stun: 0.65 },
   grab: { windup: 0.05, active: 0.14, recovery: 0.35, dmg: 0, range: 2.1, hitR: 0.6, knock: 0, up: 0, stun: 0 },
+  // ---- habilidades dos lutadores novos ----
+  // Encapuzada: 3 adagas em leque (projéteis; quem lançou decide o acerto)
+  daggers: { windup: 0.3, active: 0.05, recovery: 0.32, ranged: true, special: true, moveMul: 0.5 },
+  daggerHit: { dmg: 6, knock: 3.5, up: 0, stun: 0.32, count: 3, spread: 0.24, speed: 26, range: 18 },
+  // Ossudo: gira indo atrás do oponente, acerta em volta a cada tick; o último quebra a defesa e arremessa
+  whirl: { windup: 0.16, active: 1.1, recovery: 0.45, dmg: 5, radius: 2.3, knock: 2.5, up: 0, stun: 0.32, special: true, tick: 0.27, speed: 5.5, moveMul: 0 },
+  whirlEnd: { dmg: 9, knock: 13, up: 6, stun: 0.7, guardBreak: true },
+  // Necromante: círculo no chão; depois do delay sobem espetos e quem estiver dentro fica preso (root)
+  cage: { windup: 0.38, active: 0.05, recovery: 0.35, ranged: true, special: true, moveMul: 0.4 },
+  cageHit: { dmg: 8, knock: 0, up: 0, stun: 0.25, root: 1.6, radius: 2.1, delay: 0.6 },
+  // Sombra: avança atravessando o oponente (invencível) e corta; envenena (dano por segundo)
+  venom: { windup: 0.14, active: 0.3, recovery: 0.4, dmg: 7, knock: 4, up: 0, stun: 0.4, special: true, poison: 4, poisonDps: 2.5, moveMul: 0 },
+  // Lacaio: 2 mini-esqueletos saem do chão, correm atrás do oponente e explodem; um golpe destrói
+  summon: { windup: 0.5, active: 0.05, recovery: 0.4, ranged: true, special: true, moveMul: 0.3 },
+  minionHit: { dmg: 8, knock: 7, up: 5, stun: 0.45, speed: 6.5, life: 4.5, rise: 0.6 },
   sweep: { windup: 0.04, active: 0.15, recovery: 0.35, dmg: 10, range: 2.2, hitR: 0.55, knock: 4, up: 8.5, stun: 0.7, low: true },
 };
 
@@ -120,4 +135,9 @@ export const SPECIALS = {
   Knight: { kind: 'charge', name: 'INVESTIDA SAGRADA', color: 0xffd23f },
   Rogue: { kind: 'blink', name: 'PASSO SOMBRIO', color: 0xa05cff },
   Mage: { kind: 'meteor', name: 'METEORO', color: 0x4fc8ff },
+  Rogue_Hooded: { kind: 'daggers', name: 'LEQUE DE ADAGAS', color: 0x3fe0b0 },
+  Skeleton_Warrior: { kind: 'whirl', name: 'RODA DE OSSOS', color: 0xf2e6c4 },
+  Skeleton_Mage: { kind: 'cage', name: 'PRISÃO DE OSSOS', color: 0xb46bff },
+  Skeleton_Rogue: { kind: 'venom', name: 'LÂMINA VENENOSA', color: 0x7dff4a },
+  Skeleton_Minion: { kind: 'summon', name: 'EXÉRCITO DE OSSOS', color: 0xffe14d },
 };

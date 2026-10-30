@@ -26,7 +26,7 @@
 import * as THREE from 'three';
 import { Rig, loadCharacters } from './src/rig.js';
 import { Fighter } from './src/fighter.js';
-import { ATTACKS } from './src/config.js';
+import { ATTACKS, SPECIALS } from './src/config.js';
 
 await loadCharacters();
 const params = new URLSearchParams(location.search);
@@ -47,6 +47,7 @@ const POSES = [
   ['defesa-golpe', f => { f.blocking = true; f.hp -= 1; }, 0.1], // golpe batendo na guarda (pico do recuo)
   ['dash lado', f => { f.dashT = 0.15; f.dashLocal = { x: -1, z: 0 }; }, 0.12],
   ['apanhou', f => { f.flashT = 0.12; f.stunT = 0.5; }, 0.15],
+  ['habilidade', atk(SPECIALS[char]?.kind || 'slam', 1), 0.3, true],
   ['K.O.', f => { f.ko = true; }, 1.5],
 ];
 

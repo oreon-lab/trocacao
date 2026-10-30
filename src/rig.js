@@ -6,7 +6,8 @@ import { toonMat, addOutline } from './toon.js';
 import { damp, clamp } from './fighter.js';
 
 // Personagens KayKit Adventurers (Kay Lousberg, CC0) com as animações que já vêm no .glb.
-export const CHARACTERS = { Barbarian: 'Bárbaro', Knight: 'Cavaleiro', Rogue: 'Ladina', Mage: 'Mago' };
+// Aventureiros + Esqueletos (KayKit, Kay Lousberg, CC0): mesmo esqueleto de ossos, mesmas animações
+export const CHARACTERS = { Barbarian: 'Bárbaro', Knight: 'Cavaleiro', Rogue: 'Ladina', Mage: 'Mago', Rogue_Hooded: 'Encapuzada', Skeleton_Warrior: 'Ossudo', Skeleton_Mage: 'Necromante', Skeleton_Rogue: 'Sombra', Skeleton_Minion: 'Lacaio' };
 const GLTFS = {};
 export async function loadCharacters() {
   const loader = new GLTFLoader();
@@ -19,6 +20,7 @@ export async function loadCharacters() {
 }
 
 export const charClip = (name, clip) => GLTFS[name].animations.find(c => c.name === clip); // pra torcida (src/crowd.js)
+export const charNode = (name, node) => GLTFS[name].scene.getObjectByName(node); // peças do modelo (faca da Encapuzada)
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 
 // ---- quais animações do pacote fazem o quê
@@ -32,10 +34,12 @@ const CLIP = {
   slam: 'Ground_Slam', bash: 'Shield_Charge', stab: 'Dualwield_Melee_Attack_Stab', spell: 'Meteor_Call', dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',
   // giro do furacão (tools/fp_anims.py): quem gira inclinado pra trás segurando; quem é girado com os braços pra cima
   grabSpin: 'Grab_Spin', grabbed: 'Grabbed_Fly',
+  // habilidades dos lutadores novos (animações do pacote KayKit)
+  throw: 'Throw', spin: '2H_Melee_Attack_Spinning', raise: 'Spellcast_Raise', slice: 'Dualwield_Melee_Attack_Slice', summon: 'Spellcast_Summon',
 };
 const BASE = ['idle', 'guard', 'run', 'back', 'left', 'right', 'air'];               // locomoção (soma 1)
-const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'slam', 'bash', 'stab', 'spell', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR', 'grabSpin', 'grabbed'];
-const LOOPED = new Set(['block', 'cheer', 'grabSpin', 'grabbed']);
+const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'slam', 'bash', 'stab', 'spell', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR', 'grabSpin', 'grabbed', 'throw', 'spin', 'raise', 'slice', 'summon'];
+const LOOPED = new Set(['block', 'cheer', 'grabSpin', 'grabbed', 'spin']);
 // 1ª pessoa: guarda e socos próprios (mãos enquadradas, socos no centro da mira)
 const FP_CLIP = { guard: 'FP_Guard', jabL: 'FP_JabL', jabR: 'FP_CrossR', block: 'FP_Block', blockHit: 'FP_Block' };
 // em 1ª pessoa só estes golpes/estados mexem nos braços; o resto fica na guarda (vista de dentro fica caótico)
@@ -48,7 +52,7 @@ const IMPACT = {
 };
 // velocidade (m/s) em que cada ciclo de corrida não escorrega
 // qual animação cada habilidade usa
-const SPECIAL_ANIM = { slam: 'slam', charge: 'bash', blink: 'stab', meteor: 'spell' };
+const SPECIAL_ANIM = { slam: 'slam', charge: 'bash', blink: 'stab', meteor: 'spell', daggers: 'throw', whirl: 'spin', cage: 'raise', venom: 'slice', summon: 'summon' };
 const NATURAL = { run: 6, back: 2.4, left: 5.5, right: 5.5 };
 const UPPER = /spine|chest|arm|wrist|hand|head/;
 const HEIGHT = 1.75;
@@ -108,6 +112,9 @@ export class Rig {
       if (!o.isMesh) return;
       if (o.isSkinnedMesh) body.push(o); // corpo inteiro (mesmo escondido) define a escala
       if (/handslot/.test(o.parent?.name || '') || (this.fp && !/Arm/.test(o.name))) { o.visible = false; return; }
+      if (!mats.has(o.material) && o.material.name === 'Glow') { // olhos dos esqueletos: brilham, sem sombra nem piscar
+        mats.set(o.material, new THREE.MeshBasicMaterial({ color: new THREE.Color().copy(o.material.emissive).multiplyScalar(1.4) }));
+      }
       if (!mats.has(o.material)) {
         const m = toonMat(0xffffff, { map: o.material.map });
         mats.set(o.material, m);
@@ -145,7 +152,8 @@ export class Rig {
     // animações: base dividida em cima/baixo; golpes inteiros + só a parte de cima
     this.mixer = new THREE.AnimationMixer(model);
     this.clipName = k => (this.fp && FP_CLIP[k]) || CLIP[k];
-    const clip = k => gl.animations.find(c => c.name === this.clipName(k));
+    const find = n => gl.animations.find(c => c.name === n);
+    const clip = k => find(this.clipName(k)) || find('Spellcast_Raise'); // aventureiros não têm Spellcast_Summon (só o Lacaio usa)
     const act = (c, once) => {
       // dois estados com o mesmo clipe (ex.: block/blockHit) precisam de ações separadas, senão os pesos se apagam
       const a = this.mixer.clipAction(this.mixer.existingAction(c) ? c.clone() : c);
