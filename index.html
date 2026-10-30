@@ -237,6 +237,17 @@
       'Acertar golpes recarrega o dash mais rápido. Ficar só defendendo, não.',
     ];
     document.getElementById('ldTip').innerHTML = '💡 ' + tips[Math.floor(Math.random() * tips.length)];
+    // se algo quebrar no carregamento, a tela avisa em vez de ficar "aquecendo" pra sempre
+    var stuck = function (msg) {
+      if (document.getElementById('loading').classList.contains('done')) return;
+      var s = document.getElementById('ldStatus');
+      s.textContent = msg;
+      s.style.color = '#fff';
+      document.getElementById('ldTip').innerHTML = '🔄 Aperte <b>Ctrl+F5</b> (ou Ctrl+Shift+R) pra recarregar sem cache.';
+    };
+    addEventListener('error', function (e) { if (e.message || e.filename) stuck('ERRO AO CARREGAR O JOGO'); });
+    addEventListener('unhandledrejection', function () { stuck('ERRO AO CARREGAR O JOGO'); });
+    setTimeout(function () { if (document.getElementById('ldStatus').textContent === 'AQUECENDO OS PUNHOS...') stuck('DEMOROU DEMAIS...'); }, 30000);
   })();
 </script>
 <canvas id="game"></canvas>

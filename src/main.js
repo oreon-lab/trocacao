@@ -20,7 +20,8 @@ const loading = {
 };
 loading.set(0.12, 'CARREGANDO OS LUTADORES E A ARENA...');
 THREE.DefaultLoadingManager.onProgress = (url, n, total) => loading.set(0.12 + 0.73 * (n / total)); // todos os .glb/.gltf e texturas
-const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r))); // deixa o navegador desenhar o texto novo
+// deixa o navegador desenhar o texto novo; com a aba em segundo plano não vem quadro, então segue mesmo assim
+const paint = () => new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 120); });
 
 // ---------- cena ----------
 const canvas = $('game');

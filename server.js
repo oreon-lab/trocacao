@@ -11,11 +11,27 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = +process.env.PORT || 5173;
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.glb': 'model/gltf-binary', '.png': 'image/png', '.json': 'application/json', '.txt': 'text/plain' };
 
+// A hospedagem (Cloudflare na frente) guarda .js por 4h mesmo com no-cache: depois de um deploy o navegador juntava
+// index.html novo com módulos velhos e o jogo travava no carregamento. Então o index.html sai com o import map
+// apontando cada src/x.js pra src/x.js?v=<hash do conteúdo>: mudou o arquivo, muda o endereço (cache velho nunca é usado).
+const hash = f => crypto.createHash('sha1').update(fs.readFileSync(f)).digest('hex').slice(0, 10);
+function versionedIndex() {
+  const src = path.join(ROOT, 'src');
+  const map = fs.readdirSync(src).filter(f => f.endsWith('.js')).map(f => `"./src/${f}": "./src/${f}?v=${hash(path.join(src, f))}"`);
+  return fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')
+    .replace('{ "imports": {', `{ "imports": {\n  ${map.join(',\n  ')},`)
+    .replace('src="src/main.js"', `src="src/main.js?v=${hash(path.join(src, 'main.js'))}"`);
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   let file = path.normalize(path.join(ROOT, decodeURIComponent(url.pathname)));
   if (!file.startsWith(ROOT)) return res.writeHead(403).end();
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
+  if (file === path.join(ROOT, 'index.html')) {
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
+    return res.end(versionedIndex());
+  }
   fs.readFile(file, (err, data) => {
     if (err) return res.writeHead(404).end('not found');
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
