@@ -842,6 +842,7 @@ export const sfx = {
   slide: (v = 1) => play('gravel', 0.65 * v, { rate: 1.1 }),
   ko: () => { play('punch_h', 1); play('sub', 0.8); play('gong', 0.7); play('applause', 0.8, { rv: 0 }); },
   applause: (v = 1) => play('applause', v, { rv: 0 }),
+  deny: () => play('deny', 0.45, { rv: 0.03 }), // poder não saiu (sem energia, recarga, longe)
   // habilidades
   boom: (v = 1) => { play('sub', v); play('cannon', 0.6 * v); play('debris', 0.6 * v); },
   chime: (v = 1) => { play('magic', 0.55 * v, { rate: 1.2 }); play('shimmer', 0.3 * v); },

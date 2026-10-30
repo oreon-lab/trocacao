@@ -435,9 +435,12 @@ function updateHUD(dt) {
   $('eMeter').style.width = enemy.meter + '%';
   $('pMeterBox').classList.toggle('full', player.meter >= T.costR);
   $('eMeterBox').classList.toggle('full', enemy.meter >= T.costR);
-  $('skQ').classList.toggle('ready', player.meter >= T.costQ);
-  $('skR').classList.toggle('ready', player.meter >= T.costR);
-  $('skG').classList.toggle('ready', player.meter >= T.costG && player.grabCd <= 0);
+  // quadrinhos dos poderes: enchem até o custo (o G mostra a recarga); liberado mas longe demais = meio apagado
+  const dist = Math.hypot(enemy.pos.x - player.pos.x, enemy.pos.z - player.pos.z), slam = SPECIALS[player.char]?.kind === 'slam';
+  const skill = (id, p, ready, far) => { const el = $(id); el.style.setProperty('--fill', Math.min(1, p).toFixed(3)); el.classList.toggle('ready', ready); el.classList.toggle('far', ready && far); };
+  skill('skQ', player.meter / T.costQ, player.meter >= T.costQ, slam && dist > ATTACKS.slam.radius + 1.5);
+  skill('skR', player.meter / T.costR, player.meter >= T.costR, dist > T.superRange);
+  skill('skG', player.grabCd > 0 ? 1 - player.grabCd / T.grabCooldown : player.meter / T.costG, player.meter >= T.costG && player.grabCd <= 0, dist > T.grabRange || S.online);
   const gTxt = player.grabCd > 0 ? `${Math.ceil(player.grabCd)}s` : `GIRO ${T.costG}`; // recarga do giro do furacão
   if (gTxt !== S.gTxt) $('skGtxt').textContent = S.gTxt = gTxt;
   // aviso da esquiva: aparece quando um golpe vem; verde = agora é esquiva perfeita
@@ -547,7 +550,7 @@ function spawnMeteor(owner, net0) {
   let target;
   if (net0) target = new THREE.Vector3(...net0.p);
   else {
-    target = owner.inCone(foe, 22, 0.5)
+    target = owner.atk?.aim || owner.inCone(foe, 22, 0.5)
       ? new THREE.Vector3(foe.pos.x + foe.vel.x * 0.3, 0, foe.pos.z + foe.vel.z * 0.3)
       : owner.forward(new THREE.Vector3()).multiplyScalar(9).add(owner.pos).setY(0);
     const r = Math.hypot(target.x, target.z), lim = arena.R - 1;
@@ -684,6 +687,19 @@ function watchAttacks(sim) {
   document.body.classList.toggle('charging', player.atk?.kind === 'super' && player.atk.phase === 'windup');
 }
 
+// poder que não saiu: balança só o quadrinho dele e diz o motivo em cima dele
+function denyPower(p, why) {
+  const box = $({ q: 'skQ', r: 'skR', grab: 'skG' }[p]);
+  box.classList.remove('deny'); void box.offsetWidth; box.classList.add('deny');
+  box.querySelector('.msg')?.remove();
+  const msg = document.createElement('i');
+  msg.className = 'msg';
+  msg.textContent = why === 'meter' ? 'FALTA ENERGIA' : why === 'cd' ? `RECARGA ${Math.ceil(player.grabCd)}s` : why === 'far' ? 'CHEGUE MAIS PERTO' : 'SÓ CONTRA O BOT';
+  box.appendChild(msg);
+  setTimeout(() => msg.remove(), 1100);
+  sfx.deny();
+}
+
 // ---------- eventos de gameplay -> juice ----------
 const clock = () => performance.now() / 1000;
 function vol(f) { return f === player ? 1 : clamp(1 - player.pos.distanceTo(f.pos) / 35, 0.2, 1); }
@@ -746,7 +762,7 @@ function handleEvents() {
         S.hitstop = Math.max(S.hitstop, 0.06);
         break;
       }
-      case 'noMeter': if (e.f === player) { const el = $('skills'); el.querySelectorAll('div').forEach(d => { d.classList.remove('deny'); void d.offsetWidth; d.classList.add('deny'); }); } break;
+      case 'deny': if (e.f === player) denyPower(e.power, e.why); break;
       case 'block':
         sfx.block(v);
         fx.burst(e.point, 0x7fd8ff, 6, 4);

@@ -45,6 +45,13 @@
   #skills { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 12px; }
   #skills div { min-width: 74px; padding: 4px 10px 3px; text-align: center; background: #3a3246cc; border: 4px solid var(--ink); border-radius: 12px; box-shadow: 3px 3px 0 var(--ink); opacity: .55; transition: opacity .15s, transform .15s; }
   #skills div.ready { opacity: 1; background: #b06bffdd; transform: translateY(-3px); }
+  #skills div { position: relative; }
+  #skills div::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--fill, 0) * 100%); background: #b06bff88; border-radius: 6px; transition: height .15s; }
+  #skills div.ready::before { background: transparent; }
+  #skills div.ready.far { opacity: .7; transform: none; filter: saturate(.45); }
+  #skills b, #skills span { position: relative; }
+  #skills .msg { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); white-space: nowrap; font: 400 20px 'Bangers', Impact, sans-serif; letter-spacing: 1px; color: #ff5a4f; -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; text-shadow: 2px 2px 0 var(--ink); animation: skMsg 1.1s ease-out forwards; pointer-events: none; }
+  @keyframes skMsg { 0% { opacity: 0; transform: translate(-50%, 6px) scale(.8); } 12% { opacity: 1; transform: translate(-50%, 0) scale(1.1); } 75% { opacity: 1; transform: translate(-50%, -6px); } 100% { opacity: 0; transform: translate(-50%, -12px); } }
   #skills div.deny { animation: deny .3s; }
   @keyframes deny { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
   #skills b { display: block; font-size: 26px; line-height: 1; -webkit-text-stroke: 2px var(--ink); paint-order: stroke fill; }

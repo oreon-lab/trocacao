@@ -86,6 +86,9 @@ export const T = {
   meterMax: 100,
   costQ: 35,            // E: habilidade do lutador (a ação continua chamada 'q' no código)
   costR: 100,           // R: super soco
+  powerBuffer: 0.45,    // E/R/G apertado no meio de outro golpe (ou tonto) fica guardado e sai assim que der
+  superRange: 6.5,      // o super voa até o oponente se ele estiver até essa distância (mais longe: avisa e não gasta)
+  grabRange: 3.6,       // o giro do furacão puxa o oponente até essa distância
   costG: 70,            // G: giro do furacão (gasta muita energia; só sai se pegar)
   parryWindow: 0.15,
   assistCone: 0.85,     // cos do ângulo da mira assistida (~32°)

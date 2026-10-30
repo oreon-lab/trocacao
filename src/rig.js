@@ -232,6 +232,7 @@ export class Rig {
       combat = this.combatT > 0 && !f.ko;
       let face = this.vyaw;
       if (combat || f.ko || f.dashT > 0) face = f.yaw; // esquivas são relativas à frente
+      if (a?.aim && foe && !foe.ko) face = Math.atan2(-(foe.pos.x - f.pos.x), -(foe.pos.z - f.pos.z)); // poder com mira automática: vira pro alvo
       else if (hs > 0.6) face = Math.atan2(-f.vel.x, -f.vel.z);
       this.vyaw += wrap(face - this.vyaw) * (1 - Math.exp(-(a ? 30 : 12) * dt));
       // giro do furacão: quem gira olha pra vítima; a vítima (e o arremessado no ar) fica deitada com a cabeça pro centro

@@ -54,6 +54,8 @@ SOUNDS = {
     **{f'shout_m{i}': (YELL.format(n), {}) for i, n in enumerate(['1yell4', '3yell3', '3yell4', '2yell1'], 1)},
     **{f'pain_m{i}': (MALE, {'take': t}) for i, t in enumerate([0, 13, 18], 1)},
     **{f'pain_f{i}': (FEM, {'take': t}) for i, t in enumerate([3, 6], 1)},
+    # interface: poder que não saiu
+    'deny1': ('kenney_interfaceSounds/Audio/error_004.ogg', {}), 'deny2': ('kenney_interfaceSounds/Audio/error_006.ogg', {}),
     # poderes e efeitos
     'sub': ('sci-fi_sounds/Audio/lowFrequency_explosion_001.ogg', {}), 'sub_long': ('sci-fi_sounds/Audio/lowFrequency_explosion_000.ogg', {}),
     'cannon': ('25-CC0-bang-sfx/cannon_02.ogg', {}), 'debris': ('sfx_breaking_and_falling/bfh1_rock_breaking_03.ogg', {}),

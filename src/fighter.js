@@ -33,6 +33,9 @@ export function segSeg(p1, q1, p2, q2, out) {
   return Math.sqrt(qx * qx + qy * qy + qz * qz);
 }
 
+// até onde cada poder mira sozinho no oponente (terremoto é em volta, não precisa)
+const POWER_AIM = { super: T.superRange, charge: 13, blink: 12, meteor: 22, grab: T.grabRange };
+
 // golpe crítico: muito mais dano e arremessa lá pra trás
 export const critDef = def => ({ ...def, dmg: def.dmg * T.critMul, knock: def.knock * T.critKnock, up: Math.max(def.up, 5), stun: def.stun * 1.4 });
 
@@ -61,7 +64,7 @@ export class Fighter {
       hp: T.hp, stunT: 0, blocking: false, blockT: 0,
       atk: null, queued: null, queueT: 0, hand: 1, flashT: 0, ko: false, // hand 1 -> 1º soco rápido = jab (esquerda)
       walkPhase: 0, landImpact: 0, comboN: 0, comboT: 0, tell: null,
-      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, grab: null, heldBy: null, thrown: null, grabCd: 0,
+      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, grab: null, heldBy: null, thrown: null, grabCd: 0, power: null, powerT: 0,
     });
   }
 
@@ -282,12 +285,16 @@ export class Fighter {
     // golpes
     // clique durante o atordoamento fica guardado e sai assim que der (não some mais)
     if (!this.ko && (I.light || I.heavy)) { this.queued = I.heavy ? 'heavy' : 'light'; this.queueT = 0.25; }
-    // poderes: R = super soco (barra cheia), E = habilidade do lutador, G = giro do furacão (energia + recarga)
-    if (canAct && !this.atk && !this.blocking && (I.q || I.r || I.grab)) {
-      if (I.r && this.meter >= T.costR) { this.meter -= T.costR; this.startAttack('super', foe); }
-      else if (I.q && this.meter >= T.costQ) { this.meter -= T.costQ; this.startAttack(SPECIALS[this.char]?.kind || 'slam', foe); }
-      else if (I.grab && this.meter >= T.costG && this.grabCd <= 0 && foe && !foe.remote) { this.grabCd = T.grabWhiffCd; this.startAttack('grab', foe); } // a energia só sai se pegar
-      else events.push({ type: 'noMeter', f: this });
+    // poderes: R = super soco, E = habilidade do lutador, G = giro do furacão.
+    // O aperto fica guardado um instante: sai assim que der (fim do golpe, fim do atordoamento, soltando a defesa).
+    // Soco que acertou pode ser cancelado direto no poder (combo). Se não der (energia, recarga, longe), avisa.
+    if (I.q || I.r || I.grab) { this.power = I.r ? 'r' : I.q ? 'q' : 'grab'; this.powerT = T.powerBuffer; }
+    if (this.power && (this.powerT -= dt) <= 0) this.power = null;
+    const cancel = this.atk && this.atk.hit && this.atk.phase === 'recovery' && ['light', 'heavy', 'lunge', 'sweep'].includes(this.atk.kind);
+    if (this.power && canAct && (!this.atk || cancel)) {
+      const why = this.usePower(this.power, foe);
+      if (why) events.push({ type: 'deny', f: this, power: this.power, why });
+      this.power = null;
     }
     if (this.queued && !this.atk && canAct && !this.blocking) this.startAttack(this.queued, foe);
     if (this.atk) {
@@ -304,15 +311,15 @@ export class Fighter {
         a.t -= d.windup;
         events.push({ type: 'swing', f: this, kind: a.kind });
         if (d.ranged) { a.hit = true; events.push({ type: 'fire', f: this }); } // solta a bola de energia
-        if (a.kind === 'super') { // avança voando até o oponente
-          const dd = foe ? this.inCone(foe, 7, 0.6) : 0, f = this.forward(_d);
-          const v = dd ? Math.min(16, (dd - 1) * 7) : 10;
+        if (a.kind === 'super') { // avança voando até o oponente (mira automática: vai nele mesmo fora da mira)
+          const dd = foe ? (a.aim ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : this.inCone(foe, 7, 0.6)) : 0, f = this.forward(_d);
+          const v = dd ? clamp((dd - 1.2) * 6, 4, 26) : 10;
           if (dd) f.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize();
           this.vel.x = f.x * v;
           this.vel.z = f.z * v;
         }
         if (a.kind === 'charge') { // investida reta: pro oponente se ele tá na frente, senão pra frente
-          const dd = foe ? this.inCone(foe, 12, 0.6) : 0;
+          const dd = foe ? (a.aim ? 1 : this.inCone(foe, 12, 0.6)) : 0;
           a.dir = dd ? new THREE.Vector3(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize() : this.forward(new THREE.Vector3());
         }
         if (a.kind === 'blink') this.blinkTo(foe, arena);
@@ -329,6 +336,41 @@ export class Fighter {
 
     I.jump = I.dash = I.light = I.heavy = I.dodge = I.grab = I.q = I.r = false;
     I.dashX = I.dashZ = 0;
+  }
+
+  // usa o poder agora: null = saiu; senão o motivo ('meter' sem energia, 'cd' recarga, 'far' longe, 'online')
+  usePower(p, foe) {
+    const d = foe && !foe.ko ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : Infinity;
+    let kind, cost;
+    if (p === 'r') {
+      kind = 'super'; cost = T.costR;
+      if (this.meter < cost) return 'meter';
+      if (d > T.superRange) return 'far';
+    } else if (p === 'q') {
+      kind = SPECIALS[this.char]?.kind || 'slam'; cost = T.costQ;
+      if (this.meter < cost) return 'meter';
+      if (kind === 'slam' && d > ATTACKS.slam.radius + 1.5) return 'far'; // terremoto é em volta: de longe não pega ninguém
+    } else {
+      kind = 'grab'; cost = 0; // a energia do giro só sai se pegar
+      if (!foe || foe.remote) return 'online';
+      if (this.grabCd > 0) return 'cd';
+      if (this.meter < T.costG) return 'meter';
+      if (d > T.grabRange) return 'far';
+      this.grabCd = T.grabWhiffCd;
+    }
+    this.meter -= cost;
+    this.atk = null; // cancela a recuperação do soco que acertou
+    this.blocking = false;
+    this.queued = null;
+    this.startAttack(kind, foe);
+    // mira automática: o poder vai no oponente se ele estiver no alcance, mesmo fora da mira da câmera
+    if (d <= (POWER_AIM[kind] || 0)) this.atk.aim = foe;
+    if (kind === 'grab' && d > 1.1) { // passo rápido até ele
+      const v = Math.min(10, (d - 1.0) * 6);
+      this.vel.x += (foe.pos.x - this.pos.x) / d * v;
+      this.vel.z += (foe.pos.z - this.pos.z) / d * v;
+    }
+    return null;
   }
 
   // oponente está no cone da frente e perto? (base da mira assistida)
@@ -348,7 +390,7 @@ export class Fighter {
     // passo à frente: o soco "anda" até o oponente se ele tá quase no alcance
     if (k === 'blink') this.invulnT = Math.max(this.invulnT, def.windup + 0.04); // some na fumaça
     if (k === 'grab') { this.dashT = 0; this.vel.multiplyScalar(0.2); } // freia o dash (senão atravessa o oponente)
-    const d = foe && k !== 'sweep' && !def.special && k !== 'super' ? this.inCone(foe, 4.5, 0.75) : 0;
+    const d = foe && k !== 'sweep' && !def.special && k !== 'super' && k !== 'grab' ? this.inCone(foe, 4.5, 0.75) : 0;
     if (d > 1.1) {
       const v = Math.min(k === 'lunge' || k === 'grab' ? 9 : k === 'heavy' ? 5 : 3.5, (d - 1.0) * 6);
       this.vel.x += (foe.pos.x - this.pos.x) / d * v;
@@ -371,10 +413,11 @@ export class Fighter {
       _o.set(this.pos.x, this.eyeY, this.pos.z);
       this.lookDir(_d);
     }
-    const d = foe ? this.inCone(foe, def.range + T.assistRange) : 0;
+    const d = foe ? (this.atk?.aim === foe ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : this.inCone(foe, def.range + T.assistRange)) : 0;
     if (d) {
       const yaw = Math.atan2(-(foe.pos.x - this.pos.x), -(foe.pos.z - this.pos.z));
-      const pitch = def.low ? 0 : clamp(Math.atan2(foe.pos.y + foe.height * 0.6 - _o.y, d), this.pitch - 0.15, this.pitch + 0.15);
+      const up = Math.atan2(foe.pos.y + foe.height * 0.6 - _o.y, d);
+      const pitch = def.low ? 0 : this.atk?.aim === foe ? up : clamp(up, this.pitch - 0.15, this.pitch + 0.15); // poder com mira automática: altura certa
       const cp = Math.cos(pitch);
       _d.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
     }
@@ -461,13 +504,17 @@ export class Fighter {
 
   tryHit(foe) {
     if (foe.ko || foe.invuln) return;
+    // agarrão: pega quem estiver colado (não precisa mirar exato); passa pela defesa
+    if (this.atk.kind === 'grab') {
+      if (Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 2.4 && foe.pos.y < 1.2 && !foe.grab && !foe.heldBy && !foe.sliding) this.startGrab(foe);
+      return;
+    }
     if (this.reach(foe, this.atk.def) > 0) return;
     // slide passa por baixo de soco alto
     if (foe.sliding && !this.atk.def.low) {
       if (!this.atk.under) { this.atk.under = true; events.push({ type: 'under', f: foe, point: foe.pos.clone().setY(1) }); }
       return;
     }
-    if (this.atk.kind === 'grab') { if (foe.pos.y < 1.2 && !foe.grab && !foe.heldBy) this.startGrab(foe); return; } // agarrão passa pela defesa
     this.land(foe, this.atk.def);
   }
 
