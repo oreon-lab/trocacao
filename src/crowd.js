@@ -11,8 +11,9 @@ const FRAME_H = 2.25; // metros de personagem que cabem na foto (braços pra cim
 
 function bake(renderer) {
   const names = Object.keys(CHARACTERS);
-  const rt = new THREE.WebGLRenderTarget(CELL.w * FRAMES, CELL.h * names.length, { samples: 4 });
-  rt.texture.generateMipmaps = true;
+  // sem MSAA (o shader corta no alfa e lê por mipmap: não muda nada, e eram ~146 MB de buffers presos)
+  const rt = new THREE.WebGLRenderTarget(CELL.w * FRAMES, CELL.h * names.length);
+  rt.texture.generateMipmaps = false; // mipmaps 1x no fim (antes refazia a cadeia inteira a cada uma das 108 fotos)
   rt.texture.minFilter = THREE.LinearMipmapLinearFilter;
   const scene = new THREE.Scene();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x9ab0c8, 1.5));
@@ -50,7 +51,22 @@ function bake(renderer) {
       }
     }
     scene.remove(rig.root);
+    // libera o boneco da foto (texturas dos ossos, materiais, ações)
+    mixer.stopAllAction(); mixer.uncacheRoot(rig.model);
+    if (rig.dispose) rig.dispose();
+    else {
+      rig.model.traverse(o => o.isSkinnedMesh && o.skeleton.dispose());
+      for (const m of rig.mats || []) m.dispose();
+      for (const g of rig.glows || []) g.geometry.dispose();
+      rig.mixer?.stopAllAction(); rig.mixer?.uncacheRoot(rig.model);
+    }
   });
+  // gera os mipmaps: um render vazio de 1 pixel (canto vazio da 1ª foto) faz o three montar a cadeia
+  rt.texture.generateMipmaps = true;
+  rt.viewport.set(0, 0, 1, 1);
+  rt.scissor.set(0, 0, 1, 1);
+  renderer.setRenderTarget(rt);
+  renderer.render(new THREE.Scene(), cam);
   rt.scissorTest = false;
   renderer.setRenderTarget(null);
   renderer.setClearColor(clear, clearA);

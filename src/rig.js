@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SU from 'three/addons/utils/SkeletonUtils.js';
-import { T, SPECIALS } from './config.js';
+import { T } from './config.js';
 import { toonMat, addOutline } from './toon.js';
 import { damp, clamp } from './fighter.js';
+import { kitOf, colorOf, SLOTS } from './abilities/index.js';
 
 // Personagens KayKit Adventurers (Kay Lousberg, CC0) com as animações que já vêm no .glb.
 // Aventureiros + Esqueletos (KayKit, Kay Lousberg, CC0): mesmo esqueleto de ossos, mesmas animações
@@ -30,29 +31,24 @@ const CLIP = {
   jabL: 'Unarmed_Melee_Attack_Punch_B', jabR: 'Unarmed_Melee_Attack_Punch_A', heavy: 'Uppercut',
   kick: 'Unarmed_Melee_Attack_Kick', block: 'Block_Guard', blockHit: 'Guard_Hit', hit: 'Hit_A', hitHeavy: 'Hit_B',
   ko: 'Death_A', cheer: 'Cheer',
-  // habilidades: Ground_Slam, Shield_Charge e Meteor_Call feitas no Blender (tools/fp_anims.py); a facada dupla é do pacote
-  slam: 'Ground_Slam', bash: 'Shield_Charge', stab: 'Dualwield_Melee_Attack_Stab', spell: 'Meteor_Call', dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',
+  dodgeF: 'Dodge_Forward', dodgeB: 'Dodge_Backward', dodgeL: 'Dodge_Left', dodgeR: 'Dodge_Right',
   // giro do furacão (tools/fp_anims.py): quem gira inclinado pra trás segurando; quem é girado com os braços pra cima
   grabSpin: 'Grab_Spin', grabbed: 'Grabbed_Fly',
-  // habilidades dos lutadores novos (animações do pacote KayKit)
-  throw: 'Throw', spin: '2H_Melee_Attack_Spinning', raise: 'Spellcast_Raise', slice: 'Dualwield_Melee_Attack_Slice', summon: 'Spellcast_Summon',
+  // habilidades: cada uma diz o clipe dela em src/abilities/<char>.js (anim) -> chaves 'ab:a2' etc.
 };
 const BASE = ['idle', 'guard', 'run', 'back', 'left', 'right', 'air'];               // locomoção (soma 1)
-const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'slam', 'bash', 'stab', 'spell', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR', 'grabSpin', 'grabbed', 'throw', 'spin', 'raise', 'slice', 'summon'];
-const LOOPED = new Set(['block', 'cheer', 'grabSpin', 'grabbed', 'spin']);
+const OVER = ['jabL', 'jabR', 'heavy', 'kick', 'block', 'blockHit', 'hit', 'hitHeavy', 'ko', 'cheer', 'dodgeF', 'dodgeB', 'dodgeL', 'dodgeR', 'grabSpin', 'grabbed'];
+const LOOPED = new Set(['block', 'cheer', 'grabSpin', 'grabbed']);
 // 1ª pessoa: guarda e socos próprios (mãos enquadradas, socos no centro da mira)
 const FP_CLIP = { guard: 'FP_Guard', jabL: 'FP_JabL', jabR: 'FP_CrossR', block: 'FP_Block', blockHit: 'FP_Block' };
 // em 1ª pessoa só estes golpes/estados mexem nos braços; o resto fica na guarda (vista de dentro fica caótico)
-const FP_OVER = new Set(['jabL', 'jabR', 'heavy', 'block', 'blockHit', 'ko', 'bash', 'spell']);
+const FP_OVER = new Set(['jabL', 'jabR', 'heavy', 'block', 'blockHit', 'ko']); // habilidades: anim.fp
 // segundo do clipe em que a mão/pé chega no alcance máximo (medido no .glb / no Blender)
 const IMPACT = {
   Unarmed_Melee_Attack_Punch_B: 0.33, Unarmed_Melee_Attack_Punch_A: 0.5, Unarmed_Melee_Attack_Kick: 0.37,
   Uppercut: 13 / 30, FP_JabL: 5 / 30, FP_CrossR: 6 / 30,
-  Ground_Slam: 13 / 30, Shield_Charge: 5 / 30, Meteor_Call: 16 / 30, Dualwield_Melee_Attack_Stab: 18 / 30,
 };
 // velocidade (m/s) em que cada ciclo de corrida não escorrega
-// qual animação cada habilidade usa
-const SPECIAL_ANIM = { slam: 'slam', charge: 'bash', blink: 'stab', meteor: 'spell', daggers: 'throw', whirl: 'spin', cage: 'raise', venom: 'slice', summon: 'summon' };
 const NATURAL = { run: 6, back: 2.4, left: 5.5, right: 5.5 };
 const UPPER = /spine|chest|arm|wrist|hand|head/;
 const HEIGHT = 1.75;
@@ -93,7 +89,8 @@ function rotateWorld(bone, axis, angle) {
 
 export class Rig {
   // firstPerson: cópia presa na câmera mostrando só os braços (olhos do boneco = câmera)
-  constructor(name, { firstPerson = false } = {}) {
+  // lite: sem as animações das habilidades (lacaios invocados)
+  constructor(name, { firstPerson = false, lite = false } = {}) {
     const gl = GLTFS[name];
     this.name = name;
     this.fp = firstPerson;
@@ -111,7 +108,7 @@ export class Rig {
     model.traverse(o => {
       if (!o.isMesh) return;
       if (o.isSkinnedMesh) body.push(o); // corpo inteiro (mesmo escondido) define a escala
-      if (/handslot/.test(o.parent?.name || '') || (this.fp && !/Arm/.test(o.name))) { o.visible = false; return; }
+      if (/handslot/.test(o.parent?.name || '') || (this.fp && !/Arm/.test(o.name))) { o.visible = false; return; } // armas: só com anim.props
       if (!mats.has(o.material) && o.material.name === 'Glow') { // olhos dos esqueletos: brilham, sem sombra nem piscar
         mats.set(o.material, new THREE.MeshBasicMaterial({ color: new THREE.Color().copy(o.material.emissive).multiplyScalar(1.4) }));
       }
@@ -153,7 +150,7 @@ export class Rig {
     this.mixer = new THREE.AnimationMixer(model);
     this.clipName = k => (this.fp && FP_CLIP[k]) || CLIP[k];
     const find = n => gl.animations.find(c => c.name === n);
-    const clip = k => find(this.clipName(k)) || find('Spellcast_Raise'); // aventureiros não têm Spellcast_Summon (só o Lacaio usa)
+    const clip = k => find(this.clipName(k)) || find('Spellcast_Raise');
     const act = (c, once) => {
       // dois estados com o mesmo clipe (ex.: block/blockHit) precisam de ações separadas, senão os pesos se apagam
       const a = this.mixer.clipAction(this.mixer.existingAction(c) ? c.clone() : c);
@@ -164,9 +161,37 @@ export class Rig {
     };
     this.base = Object.fromEntries(BASE.map(k => [k, { up: act(half(clip(k), true)), lo: act(half(clip(k), false)) }]));
     this.over = Object.fromEntries(OVER.map(k => [k, { full: act(clip(k), !LOOPED.has(k)), up: act(half(clip(k), true), !LOOPED.has(k)), dur: clip(k).duration }]));
+    // habilidades do kit: 'ab:a2' (clipe único) ou 'ab:a2:1' (lista de clipes escolhida por c.stage)
+    this.anims = {};
+    if (!lite) for (const slot of SLOTS) {
+      const A = kitOf(name).abilities[slot].anim;
+      if (!A?.clip) continue;
+      [].concat(A.clip).forEach((cn, i, all) => {
+        const key = all.length > 1 ? `ab:${slot}:${i}` : `ab:${slot}`;
+        let c = find(cn);
+        if (!c) { console.warn('[rig] clipe não existe:', name, cn); c = find(A.fallback) || find('Spellcast_Raise'); }
+        this.anims[key] = A;
+        this.over[key] = { full: act(c, !A.loop), up: act(half(c, true), !A.loop), dur: c.duration };
+      });
+    }
+    this.overKeys = Object.keys(this.over);
+    // peças que as habilidades mostram (anim.props): arma do próprio modelo ou emprestada [char, nó, osso]
+    this.props = {};
+    if (!lite && !this.fp) for (const slot of SLOTS) for (const p of kitOf(name).abilities[slot].anim?.props || []) {
+      const [ch, node, bone] = Array.isArray(p) ? p : [name, p];
+      if (this.props[node]) continue;
+      const src = charNode(ch, node);
+      if (!src) { console.warn('[rig] peça não existe:', ch, node); continue; }
+      const o = src.clone();
+      o.material = toonMat(0xffffff, { map: src.material.map });
+      addOutline(o, 0.02);
+      o.visible = false;
+      this.bone(bone || src.parent.name)?.add(o);
+      this.props[node] = o;
+    }
     this.bw = Object.fromEntries(BASE.map(k => [k, k === 'idle' ? 1 : 0]));
-    this.ow = Object.fromEntries(OVER.map(k => [k, 0]));
-    this.ou = Object.fromEntries(OVER.map(k => [k, 0]));
+    this.ow = Object.fromEntries(this.overKeys.map(k => [k, 0]));
+    this.ou = Object.fromEntries(this.overKeys.map(k => [k, 0]));
 
     // brilho na mão quando o golpe está sendo armado (aviso pro outro jogador)
     this.glowMat = new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0, depthWrite: false });
@@ -210,9 +235,9 @@ export class Rig {
   start(key, a) {
     const o = this.over[key];
     let rate = 1, t0 = 0;
-    const hit = IMPACT[this.clipName(key)];
-    if (a && hit !== undefined && a.def.special) {
-      rate = hit / (a.def.windup + (a.def.hitDelay || 0)); // impacto da animação = momento do golpe no jogo
+    const hit = IMPACT[this.clipName(key)], A = this.anims[key];
+    if (A) { // habilidade: o impacto do clipe cai no fim do windup (+hitDelay); sem impact = velocidade fixa
+      rate = A.impact ? A.impact / Math.max(0.05, a.def.windup + (a.def.hitDelay || 0)) : A.speed || 1;
     } else if (a && hit !== undefined) {
       const w = a.def.windup + 0.02;
       rate = key === 'heavy' ? hit / (w + 0.03) : a.kind === 'lunge' ? 2.2 : 1.8;
@@ -290,29 +315,32 @@ export class Rig {
     else if (foe?.ko) key = 'cheer';
     else if (f.stunT > 0) { key = this.hitKey; id = this.hitN; }
     else if (a) {
-      key = SPECIAL_ANIM[a.kind] || (a.kind === 'heavy' || a.kind === 'super' ? 'heavy' : a.kind === 'sweep' ? 'kick' : a.kind === 'lunge' || a.hand === 1 ? 'jabR' : 'jabL');
-      id = a;
-      upper = f.grounded && hs > 2.5 && a.kind === 'light' ? 1 : 0;
+      const A = a.def.slot && a.def.anim, n = A?.clip ? [].concat(A.clip).length : 0;
+      key = n ? (n > 1 ? `ab:${a.def.slot}:${Math.min(a.stage || 0, n - 1)}` : `ab:${a.def.slot}`)
+        : a.kind === 'heavy' || a.def.slot ? 'heavy' : a.kind === 'sweep' ? 'kick' : a.kind === 'lunge' || a.hand === 1 ? 'jabR' : 'jabL';
+      if (!this.over[key]) key = 'heavy';
+      id = a.id + key;
+      upper = n ? (A.upper ? 1 : 0) : f.grounded && hs > 2.5 && a.kind === 'light' ? 1 : 0;
     } else if (f.dashT > 0) {
       const d = f.dashLocal;
       key = Math.abs(d.x) > Math.abs(d.z) ? (d.x < 0 ? 'dodgeL' : 'dodgeR') : d.z < 0 ? 'dodgeB' : 'dodgeF';
       id = this.dashN;
     } else if (f.blocking) { key = this.blockHitT > 0 ? 'blockHit' : 'block'; upper = hs > 1 ? 1 : 0; }
-    if (this.fp && key && !FP_OVER.has(key)) key = null;
+    if (this.fp && key && !(this.anims[key] ? this.anims[key].fp : FP_OVER.has(key))) key = null;
     if (key && (key !== this.cur || id !== this.curId)) this.start(key, a);
     this.cur = key;
     this.curId = id;
 
     // ---- pesos suaves (entra rápido, sai um pouco mais devagar)
     let O = 0;
-    for (const k of OVER) {
+    for (const k of this.overKeys) {
       this.ow[k] = damp(this.ow[k], k === key ? 1 : 0, k === key ? 25 : 12, dt);
       if (k === key) this.ou[k] = damp(this.ou[k], upper, 20, dt);
       O += this.ow[k];
     }
     const ns = O > 1 ? 1 / O : 1;
     let F = 0, U = 0;
-    for (const k of OVER) { this.ow[k] *= ns; F += this.ow[k] * (1 - this.ou[k]); U += this.ow[k] * this.ou[k]; }
+    for (const k of this.overKeys) { this.ow[k] *= ns; F += this.ow[k] * (1 - this.ou[k]); U += this.ow[k] * this.ou[k]; }
     let bs = 0;
     for (const k of BASE) bs += (this.bw[k] = damp(this.bw[k], B[k], 10, dt));
     for (const k of BASE) {
@@ -320,7 +348,7 @@ export class Rig {
       this.base[k].lo.setEffectiveWeight(w * (1 - F));
       this.base[k].up.setEffectiveWeight(w * Math.max(0, 1 - F - U));
     }
-    for (const k of OVER) {
+    for (const k of this.overKeys) {
       this.over[k].full.setEffectiveWeight(this.ow[k] * (1 - this.ou[k]));
       this.over[k].up.setEffectiveWeight(this.ow[k] * this.ou[k]);
     }
@@ -350,8 +378,10 @@ export class Rig {
       this.pivot.rotation.x = this.lean - this.fly * Math.PI / 2;
     }
 
-    // Passo Sombrio: some na fumaça até reaparecer atrás do oponente
-    this.model.visible = !(a?.kind === 'blink' && a.phase === 'windup' && a.t > 0.05);
+    // habilidade pode sumir com o modelo (Passo Sombrio) e mostrar armas (anim.props)
+    const A = a?.def.slot && a.def.anim;
+    this.model.visible = !A?.hide?.(a);
+    for (const n in this.props) this.props[n].visible = !!A?.props?.some(p => (Array.isArray(p) ? p[1] : p) === n);
 
     // flash ao apanhar; brilho na mão que vai bater
     const fl = f.flashT > 0 ? 0.6 : 0;
@@ -360,8 +390,8 @@ export class Rig {
     const tk = a ? a.kind : tell?.kind;
     const hand = a ? a.hand : tk === 'light' ? f.hand ^ 1 : 1;
     const charging = !!tell || (a && a.phase === 'windup' && a.kind !== 'sweep');
-    const theme = SPECIALS[this.name]?.color ?? 0xb06bff; // habilidade, super e agarrão brilham na cor do lutador
-    this.glowMat.color.set(tk === 'super' || tk === 'grab' || a?.def.special ? theme : tk === 'heavy' ? 0xff4b3e : 0xffd23f);
+    const theme = colorOf(this.name); // habilidade e agarrão brilham na cor do lutador
+    this.glowMat.color.set(tk === 'grab' || a?.def.special ? theme : tk === 'heavy' ? 0xff4b3e : 0xffd23f);
     this.glowMat.opacity = damp(this.glowMat.opacity, charging ? 0.5 + 0.25 * Math.sin(performance.now() * 0.04) : 0, 30, dt);
     this.glows.forEach((g, i) => (g.visible = this.glowMat.opacity > 0.02 && (tk === 'grab' || i === hand))); // agarrão: as duas mãos
   }

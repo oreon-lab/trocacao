@@ -1,4 +1,5 @@
-import { ATTACKS } from './config.js';
+import { T, ATTACKS } from './config.js';
+import { packStatus, unpackStatus } from './abilities/index.js';
 
 // Conexão com a sala no servidor (mesmo host que entrega o jogo).
 export class Net {
@@ -24,8 +25,8 @@ export function snapshot(f, extra) {
     p: [r2(f.pos.x), r2(f.pos.y), r2(f.pos.z)], v: [r2(f.vel.x), r2(f.vel.y), r2(f.vel.z)],
     y: r2(f.yaw), pi: r2(f.pitch), h: r2(f.height), wp: r2(f.walkPhase),
     b: (f.grounded ? 1 : 0) | (f.blocking ? 2 : 0) | (f.sliding ? 4 : 0) | (f.crouching ? 8 : 0) | (f.ko ? 16 : 0),
-    d: r2(f.dashT), dl: [r2(f.dashLocal.x), r2(f.dashLocal.z)], st: r2(f.stunT), fl: r2(f.flashT), hp: r2(f.hp), hd: f.hand, m: Math.round(f.meter), iv: r2(f.invulnT), ro: r2(f.rootT), po: r2(f.poisonT),
-    a: a ? { id: a.id, k: a.kind, ph: a.phase, t: r2(a.t), hd: a.hand } : null,
+    d: r2(f.dashT), dl: [r2(f.dashLocal.x), r2(f.dashLocal.z)], st: r2(f.stunT), fl: r2(f.flashT), hp: r2(f.hp), hd: f.hand, m: Math.round(f.meter), iv: r2(f.invulnT), sts: packStatus(f), // sts: status ativos {id:[tempo,cargas]}
+    a: a ? { id: a.id, k: a.kind, ph: a.phase, t: r2(a.t), hd: a.hand, s: a.stage || undefined } : null,
   };
 }
 
@@ -61,10 +62,13 @@ export class Remote {
     // estado discreto vem do pacote mais novo já "alcançado"
     const S = k > 0.5 ? B : A;
     f.grounded = !!(S.b & 1); f.blocking = !!(S.b & 2); f.sliding = !!(S.b & 4); f.crouching = !!(S.b & 8); f.ko = !!(S.b & 16);
-    f.dashT = S.d; f.dashLocal = { x: S.dl[0], z: S.dl[1] }; f.stunT = S.st; f.flashT = S.fl; f.hp = S.hp; f.hand = S.hd; f.meter = S.m || 0; f.invulnT = S.iv || 0; f.rootT = S.ro || 0; f.poisonT = S.po || 0;
+    f.dashT = S.d; f.dashLocal = { x: S.dl[0], z: S.dl[1] }; f.stunT = S.st; f.flashT = S.fl; f.hp = S.hp; f.hand = S.hd; f.meter = S.m || 0; f.invulnT = S.iv || 0;
+    f.dashT0 = T.dashTime; f.dashIF = T.dashIFrames; // invencível no começo do dash (igual ao lado de lá)
+    unpackStatus(f, S.sts);
     if (S.a) {
       if (!f.atk || f.atk.id !== S.a.id) f.atk = { id: S.a.id, kind: S.a.k, def: ATTACKS[S.a.k], hand: S.a.hd, hit: false };
       f.atk.phase = S.a.ph;
+      f.atk.stage = S.a.s || 0;
       f.atk.t = S.a.t;
     } else f.atk = null;
     f.queued = null;

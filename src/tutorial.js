@@ -1,5 +1,5 @@
 import { keyName } from './input.js';
-import { ATTACKS, SPECIALS } from './config.js';
+import { kitOf, SLOTS, resetSlots } from './abilities/index.js';
 
 // TREINO RÁPIDO: na primeira vez o jogo já entra na arena contra um boneco de treino.
 // Cada passo mostra a(s) tecla(s) grande(s) na tela e avança sozinho quando você faz o movimento.
@@ -9,8 +9,7 @@ export function createTutorial({ player, enemy, S, settings, sfx, onFinish }) {
   const keys = a => settings.binds[a].filter(Boolean).slice(0, 1).map(keyName);
   const move = () => ['forward', 'left', 'back', 'right'].map(a => keyName(settings.binds[a][0]));
   const mine = e => e.f === player;
-  const special = () => SPECIALS[player.char]?.name || 'HABILIDADE';
-  const fill = () => { player.meter = 100; player.grabCd = 0; };
+  const fill = () => { player.meter = 100; player.grabCd = 0; resetSlots(player); }; // treino: energia cheia e sem recarga
   // dummy: o que o boneco faz no passo (null = fica parado olhando pra você)
   const STEPS = [
     { keys: move, text: 'ANDE', sub: 'ande pela arena', need: 5, walk: true },
@@ -20,10 +19,15 @@ export function createTutorial({ player, enemy, S, settings, sfx, onFinish }) {
     { keys: () => keys('jump'), text: 'PULO DUPLO', sub: 'pule e aperte de novo no ar', need: 1, ok: e => e.type === 'jump' && mine(e) && e.double },
     { keys: () => keys('block'), text: 'DEFENDA', sub: 'segure quando ele atacar', need: 2, dummy: 'light', ok: e => (e.type === 'block' || e.type === 'parry') && e.victim === player },
     { keys: () => keys('dodge'), text: 'ESQUIVA PERFEITA', sub: 'ele vai atacar: aperte quando a tecla ficar VERDE', need: 1, dummy: 'heavy', dodge: true, ok: e => e.type === 'perfect' && mine(e) },
-    { keys: () => keys('q'), text: 'HABILIDADE', sub: () => special(), need: 1, setup: fill, ok: e => e.type === 'swing' && mine(e) && ATTACKS[e.kind]?.special },
-    { keys: () => keys('r'), text: 'SUPER SOCO', sub: 'gasta a barra de energia inteira', need: 1, setup: fill, ok: e => e.type === 'swing' && mine(e) && e.kind === 'super' },
+    // (aqui entram as habilidades do lutador: E, R, Z e a ULT no X — montadas no start())
     { keys: () => keys('grab'), text: 'GIRO DO FURACÃO', sub: 'colado nele: agarra, gira e arremessa pra onde você mira', need: 1, setup: fill, ok: e => e.type === 'grab' && mine(e) },
   ];
+  const BASE = STEPS.slice(), AT = BASE.findIndex(s => s.text === 'GIRO DO FURACÃO');
+  // um passo por habilidade do seu lutador (as travadas 'EM BREVE' ficam de fora)
+  const abilitySteps = () => SLOTS.map(slot => [slot, kitOf(player.char).abilities[slot]]).filter(([, ab]) => !ab.locked).map(([slot, ab]) => ({
+    keys: () => keys(slot), text: ab.name, sub: (slot === 'ult' ? 'ULTIMATE (barra de energia cheia): ' : '') + (ab.desc || ''), need: 1, setup: fill,
+    ok: e => e.type === 'cast' && mine(e) && e.slot === slot,
+  }));
   let i = -1, n = 0, walked = 0, atkT = 0, doneT = 0, on = false;
 
   function show() {
@@ -65,7 +69,7 @@ export function createTutorial({ player, enemy, S, settings, sfx, onFinish }) {
 
   return {
     get active() { return on; },
-    start() { on = true; i = -1; $('tut').classList.remove('hidden'); next(); },
+    start() { STEPS.splice(0, STEPS.length, ...BASE.slice(0, AT), ...abilitySteps(), ...BASE.slice(AT)); on = true; i = -1; $('tut').classList.remove('hidden'); next(); },
     goto(k) { i = k - 1; next(); }, // testes (?debug): pula pro passo k
     stop() { on = false; S.timeScale = 1; $('tut').classList.add('hidden'); },
     onEvent(e) { if (on && doneT <= 0 && STEPS[i]?.ok?.(e)) hit(); },
@@ -76,7 +80,7 @@ export function createTutorial({ player, enemy, S, settings, sfx, onFinish }) {
       if (doneT > 0 && (doneT -= dt) <= 0) next();
       player.hp = Math.max(player.hp, 60);
       enemy.hp = Math.max(enemy.hp, 60);
-      if (st.setup && i >= 0) { player.meter = Math.max(player.meter, 100); player.grabCd = 0; } // treino: energia sempre cheia
+      if (st.setup && i >= 0) fill(); // treino: energia sempre cheia, sem recarga
       if (st.walk && player.grounded && doneT <= 0) {
         walked += Math.hypot(player.vel.x, player.vel.z) * dt;
         if (walked >= st.need) { n = st.need - 1; hit(); }

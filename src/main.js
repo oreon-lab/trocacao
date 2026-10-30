@@ -1,15 +1,16 @@
 import * as THREE from 'three';
-import { T, ATTACKS, SPECIALS } from './config.js';
+import { T, ATTACKS } from './config.js';
 import { Fighter, events, damp, clamp, critDef } from './fighter.js';
 import { Rig, loadCharacters, CHARACTERS } from './rig.js';
 import { createArena } from './arena.js';
-import { PlayerInput, keyName } from './input.js';
+import { PlayerInput, keyName, ACTIONS, DEFAULT_BINDS } from './input.js';
 import { Bot } from './bot.js';
-import { Net, snapshot, Remote } from './net.js';
+import { snapshot, Remote } from './net.js';
+import { lobby, ERR } from './lobby.js';
 import { FX, sfx, audio } from './fx.js';
 import { initMenu, DEFAULT_SETTINGS } from './menu.js';
 import { createTutorial } from './tutorial.js';
-import { createPowers } from './powers.js';
+import * as AB from './abilities/index.js';
 
 const $ = id => document.getElementById(id);
 
@@ -26,10 +27,29 @@ const paint = () => new Promise(r => { requestAnimationFrame(() => setTimeout(r)
 
 // ---------- cena ----------
 const canvas = $('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+// Qualidade (Configurações > Vídeo): o que pesa de verdade na GPU. Alta = visual de sempre.
+// msaa só muda ao recarregar (é do contexto WebGL); o resto troca na hora em applyQuality.
+const QUALITY_GFX = {
+  low: { msaa: false, shadowSize: 1024, shadowType: THREE.PCFShadowMap, maxDpr: 1, wallOutline: false, wallShadow: false, torch: false },
+  medium: { msaa: true, shadowSize: 1024, shadowType: THREE.PCFShadowMap, maxDpr: 1.5, wallOutline: false, wallShadow: false, torch: true },
+  high: { msaa: true, shadowSize: 2048, shadowType: THREE.PCFSoftShadowMap, maxDpr: 2, wallOutline: true, wallShadow: true, torch: true },
+};
+// 1ª vez (nada salvo): placa de vídeo integrada/software começa mais leve
+const GPU_NAME = (() => { try { const gl = document.createElement('canvas').getContext('webgl2'), e = gl.getExtension('WEBGL_debug_renderer_info'), n = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; gl.getExtension('WEBGL_lose_context')?.loseContext(); return n; } catch { return ''; } })();
+const AUTO_Q = /SwiftShader|llvmpipe|softpipe|Basic Render/i.test(GPU_NAME) ? 'low' : /Intel|Mali|Adreno|PowerVR|Radeon\(TM\) Graphics|Vega \d+ Graphics/i.test(GPU_NAME) ? 'medium' : 'high';
+const SAVED_Q = (() => { try { return JSON.parse(localStorage.getItem('trocacao') || '{}').quality; } catch {} })();
+const qLevel = v => (v === 'med' ? 'medium' : QUALITY_GFX[v] ? v : AUTO_Q); // o menu usa 'med'
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: QUALITY_GFX[qLevel(SAVED_Q)].msaa, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+let maxDpr = 2;
+// escrita no DOM só quando o valor muda (pro HUD, que roda todo quadro): setText(el, 'x'), setStyle(el, 'width', '50%'), setVar(el, '--fill', '0.5')
+const domLast = new WeakMap();
+const domChanged = (el, k, v) => { let c = domLast.get(el); if (!c) domLast.set(el, (c = {})); if (c[k] === v) return false; c[k] = v; return true; };
+const setText = (el, v) => { if (domChanged(el, '#text', v)) el.textContent = v; };
+const setStyle = (el, prop, v) => { if (domChanged(el, prop, v)) el.style[prop] = v; };
+const setVar = (el, prop, v) => { if (domChanged(el, prop, v)) el.style.setProperty(prop, v); };
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(80, 1, 0.03, 500);
 camera.rotation.order = 'YXZ';
@@ -44,6 +64,20 @@ Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 22, bottom: -22, n
 sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.02;
 scene.add(sun);
+// aplica Baixa/Média/Alta ('low' | 'med' | 'medium' | 'high'; outro valor = automático pela placa de vídeo).
+// Devolve true se precisa recarregar a página pra valer tudo (antialias).
+function applyQuality(level) {
+  const q = QUALITY_GFX[qLevel(level)];
+  if (sun.shadow.mapSize.x !== q.shadowSize) { sun.shadow.mapSize.setScalar(q.shadowSize); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+  if (renderer.shadowMap.type !== q.shadowType) { // o three não percebe a troca de tipo sozinho: recompila os materiais
+    renderer.shadowMap.type = q.shadowType;
+    scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+  }
+  arena.setQuality(q);
+  maxDpr = q.maxDpr;
+  return q.msaa !== renderer.getContextAttributes()?.antialias;
+}
+if (location.search.includes('debug')) window.applyQuality = applyQuality; // teste no console
 
 const arena = createArena(scene);
 const player = new Fighter('VOCÊ', 0x3fa7ff);
@@ -61,10 +95,15 @@ let fpRig;
 const input = new PlayerInput(canvas);
 const bot = new Bot();
 const fx = new FX(scene, camera);
-// adagas, Prisão de Ossos e mini-esqueletos (src/powers.js); embrulhos porque theme/vol/net vêm mais abaixo
-const powers = createPowers({
-  scene, fx, sfx, player, enemy, events, arena,
-  send: m => S.online && net?.send(m), pop: (p, t) => popText(p, t, 'small'), theme: f => theme(f), vol: f => vol(f),
+// habilidades (src/abilities): projéteis, zonas, lacaios e o "juice" que os kits usam; embrulhos porque S/net/vol vêm mais abaixo
+AB.init({
+  scene, camera, fx, sfx, arena, player, enemy, noCd: location.search.includes('nocd'),
+  send: m => S.online && net.send(m), vol: f => vol(f),
+  juice: {
+    pop: (p, t, cls, col) => popText(p, t, cls, col), flash: (a, c) => flashScreen(a, c), kick: (p, y, r) => camKick(p, y, r), zoom: df => camZoom(df),
+    shake: k => (S.trauma = Math.min(1, S.trauma + k)), hitstop: s => (S.hitstop = Math.max(S.hitstop, s)),
+    turnToFoe: () => { S.turn = wrap(Math.atan2(-(enemy.pos.x - player.pos.x), -(enemy.pos.z - player.pos.z)) - input.yaw); S.turnT = 0.12; },
+  },
 });
 
 // ---------- configurações (salvas no navegador) ----------
@@ -72,11 +111,17 @@ const settings = structuredClone(DEFAULT_SETTINGS);
 try {
   const saved = JSON.parse(localStorage.getItem('trocacao') || '{}');
   Object.assign(settings, saved, { binds: { ...settings.binds, ...saved.binds } }); // ação nova ganha a tecla padrão
-  const b = settings.binds; // esquiva saiu do E pro Q (habilidade foi pro E): troca quem ainda usa o padrão antigo
-  if (b.dodge[0] === 'KeyE' && b.q[0] === 'KeyQ') [b.dodge[0], b.q[0]] = ['KeyQ', 'KeyE'];
-  // ação nova (giro do furacão no G): se o G já está em outra coisa, fica sem tecla
-  if (!saved.binds?.grab && Object.keys(b).some(a => a !== 'grab' && b[a].includes('KeyG'))) b.grab = ['', ''];
+  const b = settings.binds, sb = saved.binds || {}; // esquiva saiu do E pro Q (habilidade foi pro E): troca quem ainda usa o padrão antigo
+  if (b.dodge[0] === 'KeyE' && b.q?.[0] === 'KeyQ') [b.dodge[0], b.q[0]] = ['KeyQ', 'KeyE'];
+  // 4 habilidades: a antiga do E vira a rápida (a1), a do R (super) vira a a2; ação nova ganha a tecla padrão se estiver livre
+  if (sb.q && !sb.a1) b.a1 = b.q;
+  if (sb.r && !sb.a2) b.a2 = b.r;
+  delete b.q; delete b.r;
+  for (const [a] of ACTIONS) if (!sb[a] && !(a === 'a1' && sb.q) && !(a === 'a2' && sb.r))
+    b[a] = DEFAULT_BINDS[a].map(c => (c && Object.entries(b).some(([k, v]) => k !== a && v.includes(c)) ? '' : c));
 } catch {}
+// 1ª vez num PC com placa fraca: já começa em Média/Baixa (mesmos valores do atalho de qualidade do menu)
+if (SAVED_Q === undefined && AUTO_Q !== 'high') Object.assign(settings, AUTO_Q === 'low' ? { quality: 'low', shadows: false, particles: 0.5, crowd: false, resScale: 0.75 } : { quality: 'med', particles: 0.8, resScale: 0.9 });
 const save = () => { try { localStorage.setItem('trocacao', JSON.stringify(settings)); } catch {} };
 const HP = { short: 100, normal: 160, long: 220 };
 const VIDEO = new Set([undefined, 'quality', 'resScale', 'autoRes']);
@@ -89,13 +134,8 @@ function applySettings(k) {
   arena.crowd.visible = settings.crowd;
   fx.density = settings.particles;
   $('fps').classList.toggle('hidden', !settings.showFps);
-  // HUD mostra as teclas configuradas
-  for (const [id, a] of [['dodgeKeyName', 'dodge'], ['skQk', 'q'], ['skRk', 'r'], ['skGk', 'grab']]) {
-    const name = keyName(settings.binds[a].find(Boolean));
-    $(id).textContent = name;
-    $(id).style.fontSize = name.length > 2 ? '15px' : '';
-  }
-  if (VIDEO.has(k)) { pr = maxPR(); renderer.setPixelRatio(pr); resize(); }
+  buildBar(); // HUD mostra as teclas configuradas
+  if (VIDEO.has(k)) { applyQuality(settings.quality); pr = maxPR(); renderer.setPixelRatio(pr); resize(); }
   if (k === 'char' && !S.online) setCharacters();
 }
 // personagens: o seu + um diferente sorteado pro bot
@@ -111,7 +151,7 @@ function setCharacters(foeChar) {
   fpHolder.add(fpRig.root);
   player.char = settings.char;
   enemy.char = botChar;
-  $('skQname').textContent = `${SPECIALS[settings.char].name} ${T.costQ}`;
+  buildBar();
   $('pName').textContent = CHARACTERS[settings.char].toUpperCase();
   $('eName').textContent = CHARACTERS[botChar].toUpperCase() + (foeChar ? ' (ONLINE)' : ' (BOT)');
 }
@@ -144,6 +184,13 @@ function makeThumbs() {
     out[k] = crop.toDataURL('image/jpeg', 0.85);
     sc.remove(rig.root);
   }
+  // foto da arena pro card da tela de mapas (vista do alto, na diagonal)
+  const mc = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 300);
+  mc.position.set(15, 12, 15);
+  mc.lookAt(0, 0, 0);
+  renderer.setSize(640, 360, false);
+  renderer.render(scene, mc);
+  out['map:castelo'] = canvas.toDataURL('image/jpeg', 0.8);
   return out;
 }
 
@@ -154,6 +201,12 @@ input.onToggleView = () => {
   settings.tps = S.tps = !S.tps;
   save();
 };
+// scroll do mouse = zoom (campo de visão): pra cima aproxima, pra baixo afasta; fica salvo nas configurações
+addEventListener('wheel', e => {
+  if (!input.locked || !e.deltaY) return;
+  settings.fov = clamp(settings.fov + Math.sign(e.deltaY) * 3, 65, 105);
+  save();
+}, { passive: true });
 // trava de mira (estilo Elden Ring): a câmera puxa pro oponente com mola, o mouse ainda ajusta
 input.onLock = () => {
   if (!S.lockOn && !canLock()) return;
@@ -182,7 +235,7 @@ function updateLockMark() {
   _v.set(enemy.pos.x, enemy.pos.y + enemy.height * 0.6, enemy.pos.z).project(camera);
   el.style.transform = `translate(${(_v.x * 0.5 + 0.5) * innerWidth}px, ${(-_v.y * 0.5 + 0.5) * innerHeight}px) translate(-50%,-50%)`;
 }
-const winsNeeded = () => (S.online ? 2 : settings.rounds);
+const winsNeeded = () => (S.online ? S.need || 2 : settings.rounds); // online: melhor de N da sala (prep)
 function makePips() {
   for (const id of ['pWins', 'eWins']) $(id).innerHTML = '<i></i>'.repeat(winsNeeded());
 }
@@ -191,15 +244,13 @@ function makePips() {
 const menu = initMenu({
   settings, save, onChange: applySettings, characters: CHARACTERS, thumbs: makeThumbs(),
   actions: {
-    fight: () => { startMatch(); lockPointer(); },
+    fight: () => { matchStats = newStats(); startMatch(); lockPointer(); },
     resume: lockPointer,
     restart: () => {
-      if (!S.online) startMatch();
-      else if (S.host) { S.wins = [0, 0]; S.round = 1; startRound(); }
-      lockPointer();
+      if (!S.online) { matchStats = newStats(); startMatch(); lockPointer(); } else lobby.rematch(true); // online: voto de revanche (os 2 votam = nova partida)
     },
-    quit: () => (S.online ? goOffline() : toHome()),
-    connect, leaveOnline: () => goOffline(), enterFight: lockPointer,
+    quit: () => (S.online ? (lobby.leave(), leaveMatch()) : toHome()),
+    ...onlineActions(),
     tutorial: startTutorial,
     skipTutorial: () => { settings.tutorialDone = true; save(); menu.show('home'); },
   },
@@ -222,13 +273,34 @@ function toHome() {
   menu.show('home');
 }
 function showPause() {
-  menu.setPause(S.online ? 'ONLINE' : 'PAUSADO', S.online);
+  menu.setPause({ online: S.online, tutorial: S.tutorial, round: S.round, score: S.wins, foe: CHARACTERS[enemy.char], char: player.char });
   menu.show('pause');
 }
 function showOver() {
-  menu.setOver(S.wins[0] > S.wins[1] ? 'VOCÊ VENCEU!' : 'VOCÊ PERDEU!', `${S.wins[0]} x ${S.wins[1]}`, !S.online || S.host);
+  menu.setOver({
+    won: S.wins[0] > S.wins[1], score: [...S.wins], stats: matchStats, online: S.online,
+    me: { char: player.char }, foe: { char: enemy.char, tag: S.online ? 'ONLINE' : 'CPU' },
+  });
   menu.show('over');
+  matchStats = newStats();
 }
+// estatísticas da partida pra tela de fim: conta os eventos de luta na hora que entram na fila (sem mexer no handleEvents)
+const newStats = () => [0, 1].map(() => ({ dmg: 0, hits: 0, maxCombo: 0, perfect: 0, parry: 0, crits: 0, grabs: 0, abilities: 0 }));
+let matchStats = newStats(), sawCast = false;
+const pushEvent = events.push;
+events.push = function (...list) {
+  for (const e of list) {
+    const s = matchStats[e.f === player ? 0 : e.f === enemy ? 1 : -1];
+    if (!s || S.tutorial) continue;
+    if (e.type === 'hit') { s.hits++; s.dmg += e.dmg || 0; s.maxCombo = Math.max(s.maxCombo, e.combo || 1); if (e.crit) s.crits++; }
+    else if (e.type === 'parry') matchStats[e.victim === player ? 0 : 1].parry++; // no parry o f é quem bateu
+    else if (e.type === 'perfect') s.perfect++;
+    else if (e.type === 'grab') s.grabs++;
+    else if (e.type === 'cast' && !e.recast) { sawCast = true; s.abilities++; }   // habilidades novas (src/abilities)
+    else if (e.type === 'swing' && !sawCast && ATTACKS[e.kind]?.special) s.abilities++;
+  }
+  return pushEvent.apply(this, list);
+};
 function lockPointer() {
   sfx.unlock();
   // trava o mouse ANTES da tela cheia: a tela cheia gasta o "clique" e aí o mouse não travava (precisava de 2 cliques)
@@ -245,75 +317,111 @@ document.addEventListener('pointerlockchange', () => {
 // ---------- online ----------
 // Cada um simula o próprio lutador e manda o estado 30x/s; o oponente é desenhado interpolado.
 // Golpe: quem bate detecta o acerto e manda 'hit'; quem apanha resolve (defesa/parry/acerto) e devolve 'res'.
-let net = null;
+const net = { send: m => lobby.send(m) }; // mensagens de luta vão pelo lobby (src/lobby.js); o servidor só repassa durante a partida
 const remote = new Remote();
-const netStatus = t => menu.setOnline(t, false);
-// sem msg = saiu por vontade própria (volta pro início); com msg = caiu (mostra o motivo na tela online)
-function goOffline(msg) {
-  net?.close();
-  net = null;
-  S.online = S.host = false;
-  enemy.remote = false;
-  document.exitPointerLock();
-  toHome();
-  menu.setOnline(msg || '', false);
-  if (msg) menu.show('online');
+const netStatus = (t, connected = false) => menu.setOnline?.(t, connected);
+// tela do online: a nova do menu.js (sala/lobby) se existir; senão a antiga 'online'
+const onlineScreen = () => ['room', 'lobby', 'online'].find(s => (s !== 'room' || lobby.state.room) && document.querySelector(`[data-screen="${s}"]`));
+// sai da luta online mas continua no lobby (na sala, ou no hub se saiu dela); msg = motivo (o oponente saiu, a conexão caiu...)
+function leaveMatch(msg) {
+  if (S.online) {
+    S.online = S.host = false;
+    enemy.remote = false;
+    document.exitPointerLock();
+    toHome();
+    menu.show(onlineScreen());
+  }
+  if (msg) { netStatus(msg); menu.toast?.(msg); }
 }
-enemy.onRemoteHit = (kind, point, mul, crit) => net?.send({ t: 'hit', kind, mul, crit });
+// VOLTAR da tela online: fecha a conexão e volta pro início
+function goOffline() {
+  lobby.disconnect();
+  leaveMatch();
+  toHome();
+}
 const NET = {
-  joined: m => { S.host = m.host; netStatus(m.host ? `Sala ${m.room}: esperando o oponente... manda o código pro seu amigo.` : `Entrando na sala ${m.room}...`); },
-  full: () => goOffline('Essa sala já tem 2 jogadores.'),
-  peer: () => net.send({ t: 'hello', char: settings.char }),
-  hello: m => {
-    S.online = true;
-    enemy.remote = true;
-    T.hp = HP.normal; // online: vida padrão pros dois
-    setCharacters(m.char);
-    makePips();
-    menu.setOnline('Oponente conectado! Clique em ENTRAR NA LUTA.', true);
-    if (S.host) { S.wins = [0, 0]; S.round = 1; startRound(); }
-    if (!input.locked) menu.show('online');
-  },
   round: m => {
     S.round = m.round; S.wins = [m.wins[1], m.wins[0]]; startRound();
     if (menu.current === 'over') showPause(); // host recomeçou: convidado volta pra luta
   },
   end: m => endRound(m.w < 0 ? -1 : 1 - m.w, m.text, true),
   s: m => { remote.push(m); if (m.tm !== undefined && !S.host) S.timer = m.tm; },
-  hit: m => { // apanhei: eu resolvo (esquiva perfeita/invencível na MINHA tela vale)
-    let def = ATTACKS[m.kind];
-    if (!def || player.ko || player.invuln) return;
-    if (m.mul > 1) def = { ...def, dmg: def.dmg * m.mul, knock: def.knock * 1.3 };
-    if (m.crit) def = critDef(def);
-    const att = m.pos ? { pos: new THREE.Vector3(...m.pos), vel: new THREE.Vector3(), stunT: 0, atk: null } : enemy;
-    const res = player.receive(att, def);
-    const point = new THREE.Vector3(player.pos.x, player.pos.y + player.height * 0.65, player.pos.z);
-    events.push({ type: res, f: enemy, victim: player, kind: m.kind, point, dmg: Math.round(def.dmg), combo: player.comboN, counter: m.mul > 1, crit: m.crit });
-    net.send({ t: 'res', res, kind: m.kind, p: point.toArray(), combo: player.comboN, crit: m.crit, dmg: Math.round(def.dmg) });
-  },
-  res: m => { // resultado do meu golpe
+  hit: m => { // apanhei: eu resolvo (esquiva perfeita/invencível na MINHA tela vale). Status/puxão/etc. aplicam aqui.
     const def = ATTACKS[m.kind];
-    if (m.res === 'parry') {
-      let nx = player.pos.x - enemy.pos.x, nz = player.pos.z - enemy.pos.z;
-      const l = Math.hypot(nx, nz) || 1;
-      Object.assign(player, { stunT: 0.7, atk: null });
+    if (!def || player.ko || player.invuln) return;
+    const att = m.pos ? { pos: new THREE.Vector3(...m.pos), vel: new THREE.Vector3(), stunT: 0, atk: null } : enemy; // projétil/zona: vem do ponto
+    const res = player.receive(att, def, { mul: m.mul, counter: m.counter, crit: m.crit, dir: m.dir, x: m.x, by: enemy });
+    const point = new THREE.Vector3(player.pos.x, player.pos.y + player.height * 0.65, player.pos.z), dmg = Math.round(player.lastDmg);
+    events.push({ type: res, f: enemy, victim: player, kind: m.kind, point, dmg, combo: player.comboN, counter: m.counter, crit: m.crit });
+    net.send({ t: 'res', res, kind: m.kind, p: point.toArray(), combo: player.comboN, crit: m.crit, counter: m.counter, dmg, melee: !m.pos });
+  },
+  res: m => { // resultado do meu golpe (energia, combo, evento)
+    if (m.res === 'parry' && m.melee) { // levei parry: cambaleio (projétil rebatido não me atordoa)
+      const nx = player.pos.x - enemy.pos.x, nz = player.pos.z - enemy.pos.z, l = Math.hypot(nx, nz) || 1;
+      Object.assign(player, { stunT: 0.7, flashT: 0.12, atk: null });
       player.vel.x = (nx / l) * 8;
       player.vel.z = (nz / l) * 8;
     }
-    player.gain(m.res === 'hit' ? 7 : m.res === 'break' ? 6 : m.res === 'block' ? 2 : 0);
-    events.push({ type: m.res, f: player, victim: enemy, kind: m.kind, point: new THREE.Vector3(...m.p), dmg: m.dmg ?? def.dmg, combo: m.combo, crit: m.crit });
+    AB.result(player, enemy, m.kind, m.res, new THREE.Vector3(...m.p), m.dmg, m.combo, m.counter, m.crit);
   },
-  fire: m => (m.k ? powers.cast(m.k, enemy, m) : spawnMeteor(enemy, m)), // poder de longe do oponente (só visual; quem acerta é decidido por ele)
-  left: () => goOffline('O oponente saiu.'),
-  close: () => S.online || net ? goOffline('Conexão perdida.') : null,
+  ab: m => AB.remote(enemy, m), // habilidade do oponente: cópia só visual do projétil/zona/lacaio (quem acerta é decidido por ele)
 };
-function connect() {
-  sfx.unlock();
-  const code = ($('room').value.trim() || Math.random().toString(36).slice(2, 6)).toUpperCase();
-  $('room').value = code;
-  net?.close();
-  netStatus('Conectando...');
-  net = new Net(code, NET);
+// ---- lobby (src/lobby.js): salas, partida rápida, pronto e revanche. Os 2 prontos → 'prep' (lutadores, mapa, seed): monto a
+// luta e aviso 'loaded'. Os 2 carregaram → 'go': o host (vaga 0) começa o round 1 e segue mandando nos rounds ('round'/'end').
+lobby.setNick(settings.nick || '');
+lobby.on('welcome', st => { if (settings.nick !== st.nick) { settings.nick = st.nick; save(); } }); // apelido gerado fica salvo
+lobby.on('msg', m => NET[m.t]?.(m));
+lobby.on('prep', m => {
+  const me = m.players[m.you], foe = m.players[1 - m.you];
+  Object.assign(S, { online: true, host: m.you === 0, need: (m.bo + 1) / 2, seed: m.seed, map: m.map, state: 'menu' });
+  enemy.remote = true;
+  T.hp = HP.normal; // online: vida padrão pros dois
+  if (CHARACTERS[me.char]) settings.char = me.char;
+  setCharacters(foe.char);
+  $('eName').textContent = `${foe.nick} · ${CHARACTERS[enemy.char]}`.toUpperCase();
+  clearHazards();
+  makePips();
+  lobby.loaded(); // ponytail: os lutadores já vêm carregados do início; quando houver mapa que carrega, esperar ele aqui
+});
+lobby.on('go', () => {
+  if (S.host) { S.wins = [0, 0]; S.round = 1; startRound(); } // o convidado começa quando chega o 'round' do host
+  if (input.locked) menu.hide(); else showPause(); // mouse solto: pausa com VOLTAR (o clique trava o mouse)
+});
+lobby.on('room', r => {
+  if (S.online && (!r || r.st === 'waiting')) leaveMatch(); // a partida acabou no servidor (voltar pra sala, tempo do resultado)
+  if (!r || S.online) return;
+  // tela antiga 'online' (código + CONECTAR); a nova do menu.js escuta o lobby sozinha
+  const foe = r.players[1 - r.you];
+  if ($('room')) $('room').value = r.code;
+  netStatus(foe ? `${foe.nick} (${CHARACTERS[foe.char] || foe.char}) entrou${foe.ready ? ' e está PRONTO' : ''}! Clique em ENTRAR NA LUTA.` : `Sala ${r.code}: esperando o oponente... manda o código (ou o link ${lobby.inviteLink()}) pro seu amigo.`, !!foe);
+});
+lobby.on('peerLeft', () => leaveMatch('O oponente saiu.'));
+lobby.on('lost', () => leaveMatch(ERR.gone));
+lobby.on('error', e => netStatus(e.text));
+function onlineActions() { // chamada no initMenu (lá em cima): por isso é function
+  const char = () => settings.char;
+  return {
+    connect: () => { // tela antiga: código vazio = cria sala; com código = entra
+      sfx.unlock();
+      const code = $('room')?.value.trim().toUpperCase();
+      if (code && code === lobby.state.room?.code) return; // já está nessa sala
+      lobby.leave();
+      if (code) lobby.joinRoom(code, char()); else lobby.createRoom({ char: char() });
+      netStatus('Conectando...');
+    },
+    leaveOnline: () => goOffline(),
+    enterFight: () => { lobby.ready(true); lockPointer(); },
+    // atalhos pra tela nova (ou ela chama o lobby direto)
+    quick: () => { sfx.unlock(); lobby.quickMatch(char()); },
+    createRoom: o => lobby.createRoom({ ...o, char: char() }),
+    joinRoom: code => lobby.joinRoom(typeof code === 'object' ? code.code : code, char()),
+    cancelSearch: () => lobby.cancel(),
+    leaveRoom: () => lobby.leave(),
+    setReady: (on = true) => { lobby.ready(on); if (on) lockPointer(); },
+    refreshRooms: () => lobby.list(true),
+    rematch: () => lobby.rematch(true),
+    changeChar: k => { if (CHARACTERS[k]) { settings.char = k; save(); lobby.pick(k); } },
+  };
 }
 
 function startMatch() {
@@ -433,31 +541,19 @@ function updateHUD(dt) {
   S.trail[1] = enemy.hp < S.trail[1] ? damp(S.trail[1], enemy.hp, 3, dt) : enemy.hp;
   const pct = v => (v / T.hp) * 100 + '%';
   hud.pFill.style.width = pct(player.hp);
-  hud.pFill.classList.toggle('poison', player.poisonT > 0); hud.eFill.classList.toggle('poison', enemy.poisonT > 0);
+  hud.pFill.classList.toggle('poison', !!player.st.poison); hud.eFill.classList.toggle('poison', !!enemy.st.poison);
   hud.eFill.style.width = pct(enemy.hp);
   hud.pTrail.style.width = pct(S.trail[0]);
   hud.eTrail.style.width = pct(S.trail[1]);
   // energia e poderes
   $('pMeter').style.width = player.meter + '%';
   $('eMeter').style.width = enemy.meter + '%';
-  $('pMeterBox').classList.toggle('full', player.meter >= T.costR);
-  $('eMeterBox').classList.toggle('full', enemy.meter >= T.costR);
-  // quadrinhos dos poderes: enchem até o custo (o G mostra a recarga); liberado mas longe demais = meio apagado
-  const dist = Math.hypot(enemy.pos.x - player.pos.x, enemy.pos.z - player.pos.z), slam = SPECIALS[player.char]?.kind === 'slam';
-  const skill = (id, p, ready, far) => { const el = $(id); el.style.setProperty('--fill', Math.min(1, p).toFixed(3)); el.classList.toggle('ready', ready); el.classList.toggle('far', ready && far); };
-  skill('skQ', player.meter / T.costQ, player.meter >= T.costQ, slam && dist > ATTACKS.slam.radius + 1.5);
-  skill('skR', player.meter / T.costR, player.meter >= T.costR, dist > T.superRange);
-  skill('skG', player.grabCd > 0 ? 1 - player.grabCd / T.grabCooldown : player.meter / T.costG, player.meter >= T.costG && player.grabCd <= 0, dist > T.grabRange || S.online);
-  const gTxt = player.grabCd > 0 ? `${Math.ceil(player.grabCd)}s` : `GIRO ${T.costG}`; // recarga do giro do furacão
-  if (gTxt !== S.gTxt) $('skGtxt').textContent = S.gTxt = gTxt;
-  // aviso da esquiva: aparece quando um golpe vem; verde = agora é esquiva perfeita
-  const th = threat(), now = S.state === 'fight' && player.perfectWindow(enemy);
-  // tecla da esquiva: aparece quando o golpe vem; na hora de apertar fica verde e um círculo fecha nela
-  // (o círculo fechando = o tempo que você tem; encostou na tecla, acabou)
-  const left = S.state === 'fight' ? player.perfectLeft(enemy) : -1;
-  $('dodgeKey').classList.toggle('show', settings.dodgeHint && (now || (!!th && th.k > 0.3)));
-  $('dodgeKey').classList.toggle('now', now);
-  if (now) $('dodgeRing').style.transform = `scale(${1 + 1.7 * Math.min(1, left / T.perfectWindow)})`;
+  $('pMeterBox').classList.toggle('full', player.meter >= T.meterMax); // ULT pronta
+  $('eMeterBox').classList.toggle('full', enemy.meter >= T.meterMax);
+  updateBar();
+  updateStatus(player, $('pSts'));
+  updateStatus(enemy, $('eSts'));
+  $('dashes').classList.toggle('full', player.charges >= T.dashCharges); // cargas do dash só aparecem quando faltam
   hud.timer.textContent = Number.isFinite(S.timer) ? Math.ceil(S.timer) : '∞';
   dashPips.forEach((el, i) => {
     const k = i < player.charges ? 1 : i === player.charges ? player.rechargeT / T.dashRecharge : 0;
@@ -483,41 +579,96 @@ function updateHUD(dt) {
   }
 }
 
+// ---------- barra de habilidades + status ----------
+// tecla curta pro HUD (Mouse Lateral 1 não cabe no quadrinho)
+function keyCap(a) {
+  const c = settings.binds[a]?.find(Boolean), SHORT = { Mouse0: 'M1', Mouse1: 'M3', Mouse2: 'M2', Mouse3: 'M4', Mouse4: 'M5', ShiftLeft: '⇧', ShiftRight: '⇧', Space: '␣', ControlLeft: 'Ctrl' };
+  return c ? SHORT[c] || keyName(c) : '—';
+}
+// monta os quadrinhos (E R Z | X | G) do seu lutador; roda de novo ao trocar lutador ou teclas
+function buildBar() {
+  const bar = $('abBar'), kit = AB.kitOf(settings.char), col = '#' + kit.color.toString(16).padStart(6, '0'), list = [...AB.SLOTS, 'grab'];
+  bar.innerHTML = list.map(s => {
+    const ab = kit.abilities[s] || { name: 'GIRO', glyph: '🌪' }, ico = ab.icon ? `<img class="ico" src="${ab.icon}" alt="">` : `<i class="ico">${ab.glyph || '✦'}</i>`;
+    return `<div class="sk ${s === 'ult' || s === 'grab' ? 'sk--' + s : ''}" id="sk-${s}" style="--c:${s === 'grab' ? '#7fd8ff' : col}">${ico}<kbd>${keyCap(s)}</kbd><span class="num"></span><em class="nm">${ab.name}</em></div>`;
+  }).join('');
+  bar._s = list.map(s => ({ s, el: $('sk-' + s), num: $('sk-' + s).querySelector('.num'), was: 0 }));
+}
+// todo quadro: varredura da recarga, segundos, longe/sem energia/preso, ULT enchendo; pisca quando volta (a2/a3/ult)
+function updateBar() {
+  const bar = $('abBar');
+  if (!bar._s) return;
+  const H = AB.hud(player, enemy), d = Math.hypot(enemy.pos.x - player.pos.x, enemy.pos.z - player.pos.z);
+  for (const x of bar._s) {
+    const h = x.s === 'grab'
+      ? { cd: player.grabCd, cdMax: T.grabCooldown, why: S.online ? 'online' : player.grabCd > 0 ? 'cd' : null, far: d > T.grabRange }
+      : H[AB.SLOTS.indexOf(x.s)];
+    const cool = h.cd > 0, k = cool && h.cdMax ? Math.min(1, h.cd / h.cdMax) : 0, el = x.el;
+    setVar(el, '--cd', k.toFixed(2));
+    setText(x.num, cool ? (h.cd < 1 ? h.cd.toFixed(1) : String(Math.ceil(h.cd))) : x.s === 'ult' && player.meter < T.meterMax ? Math.floor(player.meter) + '%' : '');
+    el.classList.toggle('cool', cool);
+    el.classList.toggle('far', !!h.far && !cool);
+    el.classList.toggle('no', !!h.why && !['cd', 'far'].includes(h.why) && !h.locked);
+    el.classList.toggle('locked', !!h.locked);
+    el.classList.toggle('active', !!h.active);
+    if (x.s === 'ult') { setVar(el, '--e', (player.meter / T.meterMax).toFixed(2)); el.classList.toggle('full', player.meter >= T.meterMax); }
+    const ready = x.s === 'ult' ? player.meter >= T.meterMax : !cool;
+    if (ready && !x.was && x.s !== 'a1' && S.state === 'fight') { el.classList.remove('sk--pop'); void el.offsetWidth; el.classList.add('sk--pop'); if (x.s === 'ult') sfx.voice('prepare_yourself'); }
+    x.was = ready;
+  }
+}
+// chips de status embaixo da vida (PRESO, VENENO x2...): monta quando a lista muda; a barrinha = tempo que falta
+function updateStatus(f, el) {
+  const ids = Object.keys(f.st), key = ids.map(id => id + f.st[id].n).join();
+  if (el._key !== key) {
+    el._key = key;
+    el.innerHTML = ids.map(id => { const d = AB.STATUS[id] || {}; return `<i style="--c:#${(d.color ?? 0xffffff).toString(16).padStart(6, '0')}"><b>${d.icon || '•'}</b>${d.name || id}${f.st[id].n > 1 ? ' x' + f.st[id].n : ''}</i>`; }).join('');
+    el._t0 = {};
+  }
+  ids.forEach((id, i) => {
+    const s = f.st[id], t0 = (el._t0[id] = Math.max(el._t0[id] || 0, s.t)), c = el.children[i];
+    if (!c) return;
+    setVar(c, '--k', (s.t / t0).toFixed(2));
+    c.classList.toggle('end', s.t < 0.5);
+  });
+}
+
 // ---------- aviso de ataque do oponente ----------
-// k = 0..1 até o golpe chegar. Funciona com o bot (tell) e com qualquer oponente (windup).
+// k = 0..1 até o golpe chegar. Funciona com o bot (tell) e com qualquer oponente (windup). Habilidade usa o warn do kit.
+// Só avisa o que está no alcance; soco rápido não (é mais rápido que o reflexo: aviso vira ruído).
 const WARN = {
-  light: ['#ffd23f', 'DEFENDA!'], lunge: ['#ffd23f', 'INVESTIDA!'],
-  heavy: ['#ff4b3e', 'DESVIE!'], sweep: ['#b06bff', 'PULE!'],
-  super: ['#b06bff', 'SUPER! ESQUIVA!'],
-  slam: ['#ff7a2f', 'PULE!'], charge: ['#ffd23f', 'ESQUIVA!'], blink: ['#a05cff', 'ATRÁS DE VOCÊ!'],
-  meteor: ['#4fc8ff', 'METEORO!'], meteorHit: ['#ff6a2f', 'SAIA DO CÍRCULO!'],
-  daggers: ['#3fe0b0', 'ADAGAS! ESQUIVA!'], whirl: ['#f2e6c4', 'SAIA DE PERTO!'], cage: ['#b46bff', 'PRISÃO! SAIA!'],
-  venom: ['#7dff4a', 'VENENO! ESQUIVA!'], summon: ['#ffe14d', 'ESQUELETOS!'],
+  lunge: ['#ffd23f', 'INVESTIDA!'], heavy: ['#ff4b3e', 'DESVIE!'], sweep: ['#b06bff', 'PULE OU AGACHE!'],
+  grab: ['#ffffff', 'AGARRÃO! SAIA!'], zone: ['#ff6a2f', 'SAIA DO CÍRCULO!'],
 };
 function threat() {
   const e = enemy, p = player;
   if (S.state !== 'fight' || e.ko || p.ko || p.heldBy || e.grab) return null; // preso no giro: não tem o que desviar
   const dx = p.pos.x - e.pos.x, dz = p.pos.z - e.pos.z, d = Math.hypot(dx, dz);
-  if (p.danger) return { kind: 'meteorHit', k: p.incoming > 0 ? 1 : 0.6 };
-  if (e.tell) return { kind: e.tell.kind, k: Math.min(1, e.tell.el / e.tell.total) };
-  if (e.atk?.phase === 'windup') return { kind: e.atk.kind, k: e.atk.t / e.atk.def.windup };
+  const near = def => !!def && d < (def.slot ? def.aimRange || def.radius || def.range || 3 : def.radius ?? def.range ?? 2.5) + 2.5;
+  if (p.danger) return { kind: p.dangerKind, k: p.incoming > 0 ? 1 : 0.6, zone: true };
+  if (e.tell && e.tell.kind !== 'light' && near(ATTACKS[e.tell.kind])) return { kind: e.tell.kind, k: Math.min(1, e.tell.el / e.tell.total) };
+  const a = e.atk;
+  if (a?.phase === 'windup' && a.kind !== 'light' && near(a.def)) return { kind: a.kind, k: a.t / a.def.windup };
   if (e.sliding && d < 6) return { kind: 'sweep', k: clamp(1 - (d - 2) / 4, 0, 1) };
   const toward = (e.vel.x * dx + e.vel.z * dz) / (d || 1);
-  if (e.dashT > 0 && d < 9 && toward > 10 && e.atk?.kind !== 'venom') return { kind: 'lunge', k: clamp(1 - (d - 2.5) / 6, 0, 1) };
+  if (e.dashT > 0 && d < 9 && toward > 10 && !a?.def.through) return { kind: 'lunge', k: clamp(1 - (d - 2.5) / 6, 0, 1) };
   return null;
 }
 const _cam = new THREE.Vector3();
 function updateWarning() {
-  const th = settings.warnings ? threat() : null;
-  const ring = $('warnRing'), lbl = $('warnText'), mark = $('mark');
-  ring.style.opacity = lbl.style.opacity = th ? 1 : 0;
-  if (th) {
-    const [color, text] = WARN[th.kind] || WARN.light;
-    ring.style.borderColor = color;
-    ring.style.transform = `translate(-50%,-50%) scale(${2.6 - 1.6 * th.k})`;
-    lbl.style.color = color;
-    lbl.textContent = text;
-    mark.style.setProperty('--c', color);
+  // um aviso só: anel fechando + tecla certa + o que fazer; verde "AGORA!" = janela da esquiva perfeita aberta
+  const th = settings.warnings ? threat() : null, left = S.state === 'fight' && settings.dodgeHint ? player.perfectLeft(enemy) : -1, now = left >= 0;
+  const W = $('threat'), mark = $('mark');
+  W.classList.toggle('show', !!th || now);
+  W.classList.toggle('now', now);
+  W.classList.toggle('zone', !!th?.zone && !now);
+  if (th || now) {
+    const [color, text] = th ? WARN[th.kind] || ATTACKS[th.kind]?.warn || (th.zone ? WARN.zone : WARN.heavy) : ['#5dff7a', ''];
+    setVar(W, '--c', color);
+    setText(W.children[2], now ? 'AGORA!' : text);
+    setText(W.children[1], now ? keyCap('dodge') : th.zone ? '' : /PULE/.test(text) ? keyCap('jump') : keyCap('dodge'));
+    setVar(W, '--s', (now ? 1 + 1.7 * Math.min(1, left / T.perfectWindow) : 2.6 - 1.6 * th.k).toFixed(2));
+    if (th) mark.style.setProperty('--c', color);
   }
   // "!" em cima da cabeça do oponente; fora da tela vira seta na borda
   _cam.set(enemy.pos.x, enemy.pos.y + enemy.height + 0.45, enemy.pos.z);
@@ -550,154 +701,20 @@ function springs(dt) {
   }
 }
 
-// ---------- Meteoro (Q do Mago) ----------
-// Quem joga simula e decide se acertou (online manda 'hit' kind 'meteorHit'); o outro lado só desenha.
-// Cai onde o alvo vai estar (prevê um pouco); sair do círculo, pular alto ou esquivar na hora salva.
-const hazards = [];
-function spawnMeteor(owner, net0) {
-  const foe = owner === player ? enemy : player, H = ATTACKS.meteorHit;
-  let target;
-  if (net0) target = new THREE.Vector3(...net0.p);
-  else {
-    target = owner.atk?.aim || owner.inCone(foe, 22, 0.5)
-      ? new THREE.Vector3(foe.pos.x + foe.vel.x * 0.3, 0, foe.pos.z + foe.vel.z * 0.3)
-      : owner.forward(new THREE.Vector3()).multiplyScalar(9).add(owner.pos).setY(0);
-    const r = Math.hypot(target.x, target.z), lim = arena.R - 1;
-    if (r > lim) target.multiplyScalar(lim / r);
-    if (S.online && owner === player) net.send({ t: 'fire', p: target.toArray() });
-  }
-  fx.meteor(target, H.radius, H.delay, theme(owner), owner.pos);
-  sfx.whistle(H.delay, vol(owner));
-  hazards.push({ owner, target, t: 0, visual: !!net0 });
-}
-function clearHazards() {
-  hazards.length = 0; // os efeitos visuais terminam sozinhos
-  powers.clear();
-  player.danger = enemy.danger = null;
-}
-function updateHazards(dt) {
-  const H = ATTACKS.meteorHit;
-  for (let i = hazards.length - 1; i >= 0; i--) {
-    const h = hazards[i], target = h.owner === player ? enemy : player;
-    h.t += dt;
-    const inside = Math.hypot(target.pos.x - h.target.x, target.pos.z - h.target.z) < H.radius + T.radius && target.pos.y < 2.5;
-    if (inside) target.danger = h.target; else if (target.danger === h.target) target.danger = null;
-    if (inside && H.delay - h.t < T.perfectWindow) target.incoming = Math.max(0.01, H.delay - h.t); // janela da esquiva perfeita (quanto falta)
-    if (h.t < H.delay) continue;
-    hazards.splice(i, 1);
-    if (target.danger === h.target) target.danger = null;
-    fx.meteorImpact(h.target);
-    sfx.explosion(vol(h.owner));
-    S.trauma = Math.min(1, S.trauma + 0.9 * clamp(1 - player.pos.distanceTo(h.target) / 14, 0, 1));
-    arena.hype(0.6);
-    if (h.visual || !inside || target.ko || target.invuln) continue;
-    if (target.remote) { net.send({ t: 'hit', kind: 'meteorHit', pos: h.target.toArray() }); continue; }
-    const res = target.receive({ pos: h.target.clone(), vel: new THREE.Vector3(), stunT: 0, atk: null }, H);
-    events.push({ type: res, f: h.owner, victim: target, kind: 'meteorHit', point: target.pos.clone().setY(target.pos.y + 1), dmg: H.dmg });
-    h.owner.gain(res === 'hit' ? 7 : 2);
-  }
-}
+// projéteis, zonas e lacaios das habilidades somem (fim de round, voltar pro menu)
+function clearHazards() { AB.clear(); }
 
-// ---------- efeitos das habilidades e do super ----------
-// Lidos do estado do golpe (começou / saiu do windup), então valem igual pro oponente online.
-const theme = f => SPECIALS[f.char]?.color ?? 0xb06bff;
+// ---------- efeitos das habilidades ----------
+// Cada kit (src/abilities/<char>.js) desenha os seus em fx.start/active/tick/hit, lidos do estado: valem igual pro oponente online.
+const theme = f => AB.colorOf(f.char);
 const hex = c => '#' + c.toString(16).padStart(6, '0');
 function flashScreen(a, color = '#fff') {
   const el = $('flash');
   el.style.background = color;
   el.animate([{ opacity: a }, { opacity: 0 }], { duration: 350, easing: 'ease-out' });
 }
-const chest = f => new THREE.Vector3(f.pos.x, f.pos.y + f.height * 0.6, f.pos.z);
-function onAttackStart(f, a, col) {
-  const v = vol(f), head = f.pos.clone().setY(f.pos.y + 2.3);
-  if (a.def.special) popText(head, SPECIALS[f.char].name + '!', 'big', col);
-  switch (a.kind) {
-    case 'super':
-      fx.magicCircle(f, col, a.def.windup + a.def.active + 0.3);
-      fx.pillar(f.pos, col);
-      fx.groundRing(f.pos, col, 3.5);
-      fx.burst(chest(f), col, 18, 5);
-      flashScreen(f === player ? 0.35 : 0.2, hex(col));
-      sfx.guardBreak(v);
-      popText(head, 'SUPER!', 'big', col);
-      S.trauma = Math.min(1, S.trauma + 0.25);
-      arena.hype(0.5);
-      break;
-    case 'slam': fx.groundRing(f.pos, col, 1.4, 0.3); fx.dust(f.pos, 6); sfx.jump(v); break;
-    case 'charge': fx.crossFlash(chest(f), 1.5); fx.rays(chest(f), col, 12, 2.2); fx.groundRing(f.pos, col, 2.2); sfx.chime(v); break;
-    case 'blink': f.blinkFrom = f.pos.clone(); fx.smoke(f.pos, col); sfx.poof(v); break;
-    case 'meteor': fx.magicCircle(f, col, a.def.windup + 0.3); fx.pillar(f.pos, col); sfx.chime(v * 0.8); break;
-    case 'daggers': fx.burst(chest(f), col, 8, 3); sfx.swing(false, v); break;
-    case 'whirl': fx.groundRing(f.pos, col, a.def.radius, 0.3); fx.dust(f.pos, 6); sfx.swing(true, v); break;
-    case 'cage': case 'summon': fx.magicCircle(f, col, a.def.windup + 0.3); fx.groundRing(f.pos, col, 1.6, 0.4); sfx.chime(v * 0.8); break;
-    case 'venom': fx.groundRing(f.pos, col, 1.3, 0.25); fx.puff(chest(f), col, 0.8, 0.3); sfx.poof(v); break;
-  }
-}
-function onAttackActive(f, a, col) {
-  const v = vol(f);
-  switch (a.kind) {
-    case 'slam': {
-      fx.slam(f.pos, col, a.def.radius);
-      sfx.boom(v);
-      const near = clamp(1 - player.pos.distanceTo(f.pos) / 12, 0, 1);
-      S.trauma = Math.min(1, S.trauma + (f === player ? 0.6 : 0.9 * near));
-      if (f === player || near > 0.3) camKick(0.04, 0, (Math.random() - 0.5) * 0.06);
-      arena.hype(0.8);
-      break;
-    }
-    case 'blink':
-      fx.smoke(f.pos, col);
-      if (f.blinkFrom) fx.shadowTrail(f.blinkFrom, f.pos, col, f.height);
-      sfx.poof(v);
-      break;
-    case 'charge': sfx.dash(v); break;
-    case 'venom': fx.smoke(f.pos, col); sfx.dash(v); sfx.swing(true, v); break;
-  }
-}
-// acerto das habilidades: cada uma com a sua cara
-function abilityHit(e, col) {
-  if (e.kind === 'charge') { fx.holy(e.point, col); sfx.ding(vol(e.f)); }
-  if (e.kind === 'blink') { fx.backstab(e.point, col); sfx.slash(vol(e.f)); }
-  if (e.kind === 'venom' || e.kind === 'daggerHit') { fx.slash(e.point, col, Math.random() * 3, e.kind === 'venom' ? 2.6 : 1.6); sfx.slash(vol(e.f)); }
-  if (e.kind === 'venom') popText(e.point.clone().setY(e.point.y + 0.9), 'ENVENENADO!', 'big', col);
-  if (e.kind === 'cageHit') popText(e.point.clone().setY(e.point.y + 0.9), 'PRESO!', 'big', col);
-  if (e.kind === 'whirlEnd') { fx.explode(e.point, col, false); fx.rocks(e.point, 6, 4, 0xf2ead2, 0.12, 5); }
-}
 function watchAttacks(sim) {
-  for (const f of [player, enemy]) {
-    const a = f.atk, col = theme(f);
-    if (a && a.id !== f.fxId) { f.fxId = a.id; f.fxPhase = 'windup'; onAttackStart(f, a, col); }
-    if (a && f.fxPhase === 'windup' && a.phase !== 'windup') { f.fxPhase = a.phase; onAttackActive(f, a, col); }
-    // escudo sagrado enquanto o Cavaleiro investe
-    const charging = a?.kind === 'charge' && a.phase !== 'recovery';
-    if (charging && !f.shield) f.shield = fx.shield(col);
-    if (f.shield) {
-      if (charging) fx.shieldUpdate(f.shield, f, sim);
-      else { fx.shieldOff(f.shield, col, a?.hit); f.shield = null; }
-    }
-    // rastros contínuos
-    if (sim > 0 && a && (f.fxT = (f.fxT || 0) - sim) <= 0) {
-      f.fxT = 0.02;
-      if (a.kind === 'super' && a.phase !== 'recovery') { fx.aura(f, col); if (a.phase === 'active') fx.ghost(f, col); }
-      if (a.kind === 'meteor' && a.phase === 'windup') fx.aura(f, col);
-      if (a.kind === 'slam' && a.phase === 'windup') fx.aura(f, col);
-      if ((a.kind === 'cage' || a.kind === 'summon') && a.phase === 'windup') fx.aura(f, col);
-      if (a.kind === 'venom' && a.phase === 'active') { fx.ghost(f, col); fx.puff(chest(f), col, 0.4, 0.3); }
-      if (a.kind === 'whirl' && a.phase === 'active') { // Roda de Ossos: rastro girando + vush a cada volta
-        fx.ghost(f, col);
-        const ang = a.t * 22, r = a.def.radius * 0.8;
-        fx.puff(new THREE.Vector3(f.pos.x + Math.cos(ang) * r, f.pos.y + 1, f.pos.z + Math.sin(ang) * r), col, 0.35, 0.25);
-        if (f.grounded) fx.dust(f.pos, 1);
-        const turn = Math.floor(a.t / a.def.tick);
-        if (turn !== f.whirlTurn) { f.whirlTurn = turn; sfx.swing(true, vol(f)); fx.slash(chest(f), col, turn * 2.1, a.def.radius * 1.7, 0.3); }
-      }
-      if (charging && a.phase === 'active' && !a.hit) {
-        fx.ghost(f, col);
-        fx.puff(new THREE.Vector3(f.pos.x + (Math.random() - 0.5) * 0.6, f.pos.y + 0.3 + Math.random() * 1.2, f.pos.z + (Math.random() - 0.5) * 0.6), col, 0.5, 0.35);
-        if (f.grounded) fx.dust(f.pos, 1);
-      }
-    }
-  }
+  AB.watch(sim); // começo/active/rastro/fim de cada habilidade + visual dos status
   for (const f of [player, enemy]) {
     if (f.grab && !f.tornado) f.tornado = fx.tornado(theme(f));
     if (f.tornado) {
@@ -713,17 +730,20 @@ function watchAttacks(sim) {
       fx.puff(new THREE.Vector3(f.pos.x, f.pos.y + 0.2, f.pos.z), theme(f.thrown), 0.5, 0.25);
     }
   }
-  document.body.classList.toggle('charging', player.atk?.kind === 'super' && player.atk.phase === 'windup');
+  document.body.classList.toggle('charging', !!player.atk?.def.ult && player.atk.phase === 'windup');
 }
 
-// poder que não saiu: balança só o quadrinho dele e diz o motivo em cima dele
+// habilidade/giro que não saiu: balança só o quadrinho dele e diz o motivo em cima dele
+const DENY = { meter: 'FALTA ENERGIA', far: 'CHEGUE MAIS PERTO', root: 'PRESO!', silence: 'SILENCIADO!', air: 'SÓ NO CHÃO', locked: 'EM BREVE', online: 'SÓ CONTRA O BOT' };
 function denyPower(p, why) {
-  const box = $({ q: 'skQ', r: 'skR', grab: 'skG' }[p]);
+  const box = $('sk-' + p);
+  if (!box) return;
   box.classList.remove('deny'); void box.offsetWidth; box.classList.add('deny');
   box.querySelector('.msg')?.remove();
   const msg = document.createElement('i');
   msg.className = 'msg';
-  msg.textContent = why === 'meter' ? 'FALTA ENERGIA' : why === 'cd' ? `RECARGA ${Math.ceil(player.grabCd)}s` : why === 'far' ? 'CHEGUE MAIS PERTO' : 'SÓ CONTRA O BOT';
+  const cd = p === 'grab' ? player.grabCd : player.slots?.[p]?.cd || 0;
+  msg.textContent = why === 'cd' ? `RECARGA ${cd < 1 ? cd.toFixed(1) : Math.ceil(cd)}s` : why === 'meter' ? `FALTA ENERGIA ${Math.floor(player.meter)}/${T.meterMax}` : DENY[why] || why;
   box.appendChild(msg);
   setTimeout(() => msg.remove(), 1100);
   sfx.deny();
@@ -735,15 +755,16 @@ function vol(f) { return f === player ? 1 : clamp(1 - player.pos.distanceTo(f.po
 function handleEvents() {
   for (const e of events) {
     if (S.tutorial) tutorial.onEvent(e);
+    AB.onEvent(e); // visual do acerto de cada habilidade (kit fx.hit) + onHit de quem lançou
     const v = vol(e.f), mine = e.victim === player;
     switch (e.type) {
       case 'hit': {
-        const heavy = e.kind !== 'light', sup = e.kind === 'super', col = theme(e.f), hot = sup || ATTACKS[e.kind]?.special;
-        S.hitstop = Math.max(S.hitstop, sup ? 0.2 : hot ? 0.14 : heavy ? 0.11 : 0.055);
-        fx.burst(e.point, hot ? col : heavy ? 0xffd23f : 0xffffff, sup ? 30 : heavy ? 16 : 9, sup ? 14 : heavy ? 9 : 6);
-        fx.starBurst(e.point, sup ? 1.4 : heavy ? 0.85 : 0.5, hot ? col : heavy ? 0xffd23f : 0xffffff);
-        if (sup) { fx.explode(e.point, col, true); fx.groundRing(e.victim.pos, col, 6, 0.6); flashScreen(mine ? 0.6 : 0.4, '#fff'); }
-        abilityHit(e, col);
+        const d = ATTACKS[e.kind], heavy = e.kind !== 'light', sup = !!d?.ult, col = theme(e.f), hot = !!d?.special;
+        S.hitstop = Math.max(S.hitstop, d?.hitstop ?? (sup ? 0.2 : hot ? 0.14 : heavy ? 0.11 : 0.055)); // multi-hit: hitstop curto no kit
+        if (!d?.quiet) {
+          fx.burst(e.point, hot ? col : heavy ? 0xffd23f : 0xffffff, sup ? 30 : heavy ? 16 : 9, sup ? 14 : heavy ? 9 : 6);
+          fx.starBurst(e.point, sup ? 1.4 : heavy ? 0.85 : 0.5, hot ? col : heavy ? 0xffd23f : 0xffffff);
+        }
         sfx.hit(heavy, mine ? 1 : 0.85);
         // quem apanha geme (sempre no pesado, às vezes no rápido); o K.O. tem grito de dor
         if (e.victim.ko) sfx.pain(e.victim.char.startsWith('Rogue'), vol(e.victim));
@@ -774,13 +795,14 @@ function handleEvents() {
         if (e.f === player) sfx.voice('perfect');
         if (e.f === player) { if (!S.online) S.slowT = 0.55; camZoom(6); }
         break;
-      case 'fire': if (powers.has(e.kind)) powers.cast(e.kind, e.f); else spawnMeteor(e.f); break;
-      case 'blink': // a Ladina apareceu atrás: a câmera do jogador gira rápido pro oponente
-        if (e.f === player) {
-          S.turn = wrap(Math.atan2(-(enemy.pos.x - player.pos.x), -(enemy.pos.z - player.pos.z)) - input.yaw);
-          S.turnT = 0.12;
-        }
+      case 'armor': // armadura aguentou: dano reduzido, sem atordoar
+        sfx.block(v); fx.burst(e.point, 0xffd9a0, 10, 6);
+        popText(e.point, 'AGUENTOU!', 'big orange');
+        if (settings.dmgNumbers && e.dmg) popText(e.point.clone().setY(e.point.y + 0.6), e.dmg, '');
+        S.hitstop = Math.max(S.hitstop, 0.06);
         break;
+      case 'status': if (settings.dmgNumbers && e.dmg) popText(e.point, e.dmg, 'small'); break; // tick sem reação (zona/aura)
+      case 'resist': popText(e.f.pos.clone().setY(e.f.pos.y + 2.4), 'RESISTIU!', 'big cyan'); break; // status repetido demais
       case 'shield': { // golpe bateu no escudo sagrado
         const col = theme(e.victim);
         sfx.ding(v);
@@ -809,7 +831,6 @@ function handleEvents() {
         arena.hype(0.6);
         break;
       case 'break':
-        abilityHit(e, theme(e.f));
         sfx.guardBreak(v);
         S.hitstop = 0.12;
         fx.starBurst(e.point, 0.9, 0xff8a3d);
@@ -870,7 +891,7 @@ function handleEvents() {
       case 'under': popText(e.point, 'POR BAIXO!', 'small cyan'); sfx.slide(v); break;
       case 'swing':
         sfx.swing(e.kind !== 'light', v);
-        if (e.kind === 'super' || ((e.kind === 'heavy' || ATTACKS[e.kind]?.special) && Math.random() < 0.5)) sfx.shout(e.f.char === 'Rogue', v); // grito no golpe forte
+        if (ATTACKS[e.kind]?.ult || ((e.kind === 'heavy' || ATTACKS[e.kind]?.special) && Math.random() < 0.5)) sfx.shout(e.f.char.startsWith('Rogue'), v); // grito no golpe forte
         break;
       case 'jump': sfx.jump(v); if (e.double) { fx.ring(e.f.pos.clone(), 0xffffff, 1.2); fx.dust(e.f.pos, 3); } break;
       case 'slide': sfx.slide(v); break;
@@ -885,9 +906,9 @@ function handleEvents() {
   events.length = 0;
 }
 
-// empurra um lutador do outro (exceto durante dash: dá pra atravessar = cross-up)
+// empurra um lutador do outro (exceto durante dash ou habilidade que atravessa: cross-up)
 function separate(a, b) {
-  if (a.dashT > 0 || b.dashT > 0 || Math.abs(a.pos.y - b.pos.y) > 1.3) return;
+  if (a.dashT > 0 || b.dashT > 0 || a.atk?.def.through || b.atk?.def.through || Math.abs(a.pos.y - b.pos.y) > 1.3) return;
   const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, d = Math.hypot(dx, dz), min = T.radius * 2;
   if (d >= min || d < 1e-5) return;
   const k = (min - d) / 2 / d;
@@ -898,7 +919,9 @@ function separate(a, b) {
 
 // ---------- câmera ----------
 const _dir = new THREE.Vector3(), _aim = new THREE.Vector3(), _chest = new THREE.Vector3();
-const viewDir = out => { const cp = Math.cos(input.pitch); return out.set(-Math.sin(input.yaw) * cp, Math.sin(input.pitch), -Math.cos(input.yaw) * cp); };
+// camPitch: pra onde a câmera (e a cruz) olha; em 3ª pessoa de perto ela inclina um pouco pra baixo
+const camPitch = () => input.pitch - (S.view3 ? 0.14 * (S.camNear || 0) : 0);
+const viewDir = out => { const p = camPitch(), cp = Math.cos(p); return out.set(-Math.sin(input.yaw) * cp, Math.sin(p), -Math.cos(input.yaw) * cp); };
 
 // 3ª pessoa: a câmera fica por cima do ombro, então o soco precisa sair do personagem em direção ao ponto
 // que a CRUZ está mirando (senão passa ~0.8m ao lado). Ajuda leve: se a cruz passa a até 1m do peito do
@@ -909,7 +932,11 @@ function tpsAim() {
   _chest.set(enemy.pos.x, enemy.pos.y + enemy.height * 0.6, enemy.pos.z);
   const t = _aim.subVectors(_chest, camera.position).dot(_dir);
   const miss = t > 0 ? _aim.addScaledVector(_dir, -t).length() : Infinity; // distância da cruz até o peito do oponente
-  _aim.copy(camera.position).addScaledVector(_dir, t > 0 && miss < 1.0 ? t : (S.camDist || 3.6) + 8);
+  // corpo a corpo: oponente perto e mais ou menos na frente da câmera = o golpe vai nele (não precisa da cruz exata)
+  const ex = enemy.pos.x - player.pos.x, ez = enemy.pos.z - player.pos.z;
+  const melee = !enemy.ko && Math.hypot(ex, ez) < T.tpsMagnetRange && Math.abs(wrap(Math.atan2(-ex, -ez) - input.yaw)) < T.tpsMagnetAngle;
+  if (melee) _aim.copy(_chest);
+  else _aim.copy(camera.position).addScaledVector(_dir, t > 0 && miss < 1.6 ? t : (S.camDist || 3.6) + 8);
   const dx = _aim.x - player.pos.x, dz = _aim.z - player.pos.z;
   player.input.yaw = Math.atan2(-dx, -dz);
   player.input.pitch = clamp(Math.atan2(_aim.y - player.eyeY, Math.hypot(dx, dz)), -1.45, 1.45);
@@ -947,16 +974,20 @@ function updateCamera(dt, now) {
     // por cima do ombro: personagem no terço esquerdo, centro livre pro oponente e pra cruz.
     // Recua até 3.2m, mas encurta se bater na borda ou num pilar.
     viewDir(_dir);
-    const ex = camera.position.x + c * 1.0, ez = camera.position.z - s * 1.0, ey = camera.position.y + 0.35;
+    // luta de perto: câmera mais longe, mais alta e olhando um pouco de cima (o oponente não some atrás de você)
+    const near = !enemy.ko && PLAYING.includes(S.state) ? clamp(1 - (Math.hypot(enemy.pos.x - f.pos.x, enemy.pos.z - f.pos.z) - 3) / 7, 0, 1) : 0;
+    S.camNear = damp(S.camNear || 0, near, 3, dt);
+    const side = 1.0 + 0.3 * S.camNear;
+    const ex = camera.position.x + c * side, ez = camera.position.z - s * side, ey = camera.position.y + 0.35 + 0.65 * S.camNear;
     const blocked = (x, z) => Math.hypot(x, z) > arena.R - 0.4 || arena.pillars.some(p => Math.hypot(x - p.x, z - p.z) < p.r + 0.3);
-    let d = f.thrown && !f.grounded ? 4.2 : 3.2;
+    let d = f.thrown && !f.grounded ? 4.2 : 3.2 + 0.7 * S.camNear;
     while (d > 0.8 && blocked(ex - _dir.x * d, ez - _dir.z * d)) d -= 0.1;
     S.camDist = S.camDist ? Math.min(d, damp(S.camDist, d, 6, dt)) : d; // aproxima na hora, afasta suave
     camera.position.set(ex - _dir.x * S.camDist, Math.max(0.35, ey - _dir.y * S.camDist), ez - _dir.z * S.camDist);
   }
   // giro do furacão: câmera sobe e olha de cima pro furacão inteiro; o mouse continua girando (= pra onde vai arremessar)
   S.cineK = damp(S.cineK || 0, cine ? 1 : 0, cine ? 5 : 3, dt);
-  let pitch = input.pitch;
+  let pitch = camPitch();
   if (S.cineK > 0.001) {
     const k = S.cineK;
     _aim.set(anchor.pos.x + s * T.cineDist, T.cineHeight, anchor.pos.z + c * T.cineDist);
@@ -978,19 +1009,24 @@ player.reset(new THREE.Vector3(0, 0, 7), 0);
 enemy.reset(new THREE.Vector3(0, 0, -7), Math.PI);
 
 // ?debug no endereço expõe o estado pra testes no console
-if (location.search.includes('debug')) window.game = { tutorial, renderer, S, arena, bot, startMatch, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera, powers, loop: t => loop(t) };
+if (location.search.includes('debug')) window.game = { tutorial, renderer, S, arena, bot, startMatch, menu, settings, fx, ab: AB, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera, loop: t => loop(t) };
 
 // resolução adaptativa: se o frame passa de ~20ms por um tempo, baixa a resolução interna; se sobra, sobe
-const maxPR = () => Math.min(devicePixelRatio, 2) * settings.resScale;
-let pr = 1, frameAvg = 16, resT = 0;
+const maxPR = () => Math.min(devicePixelRatio, maxDpr) * settings.resScale;
+// Mede o intervalo do monitor (menor quadro de cada janela de 2 s ≈ vsync: 16,7 ms a 60 Hz, 6,9 ms a 144 Hz).
+// Antes subia só com quadro < 13 ms, o que nunca acontece a 60 Hz: uma travada baixava a resolução pra sempre.
+let pr = 1, frameAvg = 16, resT = 0, minDt = 1, good = 0;
 function adaptRes(dt) {
-  if (!settings.autoRes) return;
+  if (!settings.autoRes || dt <= 0) return;
   frameAvg += (dt * 1000 - frameAvg) * 0.05;
+  minDt = Math.min(minDt, dt);
   if ((resT += dt) < 2) return;
-  const want = frameAvg > 20 ? pr - 0.25 : frameAvg < 13 ? pr + 0.25 : pr;
+  const v = minDt * 1000;
+  minDt = 1; resT = 0;
+  good = frameAvg < v * 1.15 ? good + 1 : 0; // 3 janelas boas seguidas pra subir (não fica oscilando)
+  const want = frameAvg > v * 1.4 ? pr - 0.25 : good >= 3 ? pr + 0.25 : pr;
   const next = clamp(want, 0.5, maxPR());
-  if (next !== pr) { pr = next; renderer.setPixelRatio(pr); resize(); }
-  resT = 0;
+  if (next !== pr) { pr = next; good = 0; renderer.setPixelRatio(pr); resize(); }
 }
 
 let last = performance.now(), fpsN = 0, fpsT = 0;
@@ -1019,12 +1055,12 @@ function loop(now) {
     if (sim > 0) {
       const n = Math.ceil(sim / (1 / 120)), h = sim / n; // substeps de física a 120Hz
       for (let i = 0; i < n; i++) {
-        player.update(h, enemy, arena);
-        if (!S.online) enemy.update(h, player, arena);
+        // offline alterna quem anda primeiro (senão o jogador sempre ganha a troca de golpes no mesmo instante)
+        if (S.online || !(i & 1)) { player.update(h, enemy, arena); if (!S.online) enemy.update(h, player, arena); }
+        else { enemy.update(h, player, arena); player.update(h, enemy, arena); }
         separate(player, enemy);
       }
-      updateHazards(sim);
-      powers.update(sim);
+      AB.update(sim); // projéteis, zonas e lacaios das habilidades
       watchAttacks(sim);
     }
     if (S.online && (S.netT -= dt) <= 0) {
@@ -1074,7 +1110,7 @@ function loop(now) {
   arena.update(now * 0.001, dt);
   // som de fundo: a torcida segue a empolgação da luta; vento enquanto alguém gira o furacão
   const spin = player.grab ? player : enemy.grab ? enemy : null;
-  sfx.ambience(playing ? 0.14 + 0.32 * Math.min(1, arena.hypeLevel) : 0.06);
+  sfx.ambience(playing ? 0.22 : 0.08, playing ? 0.42 * clamp((arena.hypeLevel - 0.2) / 0.8, 0, 1) : 0);
   sfx.wind(spin ? 0.9 * vol(spin) * Math.min(1, spin.grab.t / 0.25) : 0, spin ? 0.8 + 0.7 * Math.min(1, spin.grab.t / T.spinTime) : 1);
   adaptRes(dt);
   updateHUD(dt);
@@ -1088,3 +1124,13 @@ renderer.compile(scene, camera); // compila os shaders agora (senão o 1º quadr
 requestAnimationFrame(loop);
 loading.done();
 if (!settings.tutorialDone) menu.show('welcome'); // primeira vez: oferece o treino antes do menu
+// link de convite (?sala=CODE): entra direto na sala
+const sala = new URLSearchParams(location.search).get('sala');
+if (sala) {
+  const q = new URLSearchParams(location.search);
+  q.delete('sala');
+  history.replaceState(null, '', location.pathname + (q.size ? `?${q}` : ''));
+  lobby.joinRoom(sala, settings.char);
+  menu.show(onlineScreen());
+}
+if (window.game) window.game.lobby = lobby;

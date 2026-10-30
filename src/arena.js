@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { T } from './config.js';
-import { toonMat, addOutline } from './toon.js';
+import { toonMat, addOutline, TORCH } from './toon.js';
 import { events } from './fighter.js';
 import { buildCrowd } from './crowd.js';
 
@@ -38,9 +38,12 @@ export function createArena(scene) {
       fragmentShader: 'uniform vec3 top; uniform vec3 bot; varying vec3 vP; void main(){ gl_FragColor = vec4(mix(bot, top, clamp(vP.y * 1.6 + 0.1, 0.0, 1.0)), 1.0); \n#include <colorspace_fragment>\n }',
     }),
   );
+  sky.renderOrder = 2; // por último: só pinta o fundo que sobrou (o depth test descarta o resto)
   scene.add(sky);
 
-  const grass = new THREE.Mesh(new THREE.CircleGeometry(300, 48), toonMat(0x7fcf62));
+  // grama só fora do muro (dentro a base cobre tudo); chão desenhado depois do piso = o piso tampa e a GPU pula
+  const grass = new THREE.Mesh(new THREE.RingGeometry(RW + 0.9, 300, 48, 1), toonMat(0x7fcf62));
+  grass.renderOrder = 1;
   grass.rotation.x = -Math.PI / 2;
   grass.position.y = -0.12;
   grass.receiveShadow = true;
@@ -50,6 +53,7 @@ export function createArena(scene) {
   base.rotation.x = -Math.PI / 2;
   base.position.y = -0.1;
   base.receiveShadow = true;
+  base.renderOrder = 1;
   scene.add(base);
 
   // faixas pintadas da arena (centro e borda), por cima do piso
@@ -113,14 +117,15 @@ export function createArena(scene) {
   // parede de energia que fecha a arena com o tempo (só aparece quando o raio diminui)
   const wall = new THREE.Mesh(
     new THREE.CylinderGeometry(1, 1, 1, 96, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xff2a4a, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }),
+    new THREE.MeshBasicMaterial({ color: 0xff2a4a, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false, forceSinglePass: true }), // 1 passada (cor única: igual)
   );
   wall.visible = false;
   wall.renderOrder = 3;
   scene.add(wall);
 
-  // chamas das tochas (brilho piscando) + luz quente nos pilares
-  const flames = [];
+  // chamas das tochas (brilho piscando, 1 desenho pra todas) + luz quente nos pilares (TORCH em toon.js, sem PointLight)
+  const flames = [], torchLights = [], flameU = { value: 0 };
+  let torchOn = true;
   const flameTex = (() => {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
@@ -130,13 +135,36 @@ export function createArena(scene) {
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
   })();
   function flame(x, y, z, size, light) {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: flameTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-    s.position.set(x, y, z);
-    s.scale.setScalar(size);
-    scene.add(s);
-    let l = null;
-    if (light) { l = new THREE.PointLight(0xff9a3c, 14, 9, 2); l.position.set(x, y, z); scene.add(l); }
-    flames.push({ s, l, size, ph: Math.random() * 10 });
+    const ph = Math.random() * 10;
+    flames.push(x, y, z, size, ph);
+    if (light && torchLights.length < TORCH.pos.value.length) torchLights.push({ v: TORCH.pos.value[torchLights.length].set(x, y, z, 0), ph });
+  }
+  // cartaz virado pra câmera por instância, tremida no shader (antes: 1 Sprite + material por tocha)
+  function buildFlames() {
+    const geo = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(1, 1));
+    const ib = new THREE.InstancedInterleavedBuffer(new Float32Array(flames), 5); // x y z tamanho fase
+    geo.setAttribute('iPos', new THREE.InterleavedBufferAttribute(ib, 4, 0));
+    geo.setAttribute('iPh', new THREE.InterleavedBufferAttribute(ib, 1, 4));
+    geo.instanceCount = flames.length / 5;
+    const m = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+      uniforms: { map: { value: flameTex }, uTime: flameU },
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexShader: `uniform float uTime; attribute vec4 iPos; attribute float iPh; varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          float k = 1.0 + sin(uTime * 17.0 + iPh) * 0.08 + sin(uTime * 29.0 + iPh * 2.0) * 0.06;
+          vec4 mv = modelViewMatrix * vec4(iPos.xyz, 1.0);
+          mv.xy += position.xy * vec2(iPos.w * k, iPos.w * k * 1.25);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `uniform sampler2D map; varying vec2 vUv;
+        void main() {
+          gl_FragColor = texture2D(map, vUv);
+          #include <colorspace_fragment>
+        }`,
+    }));
+    m.frustumCulled = false;
+    scene.add(m);
   }
 
   // ---- modelos (carregam em paralelo; o jogo espera arena.ready junto com os personagens)
@@ -151,11 +179,20 @@ export function createArena(scene) {
       'mountain_A_grass_trees', 'mountain_B_grass_trees', 'mountain_C_grass_trees', 'hills_A_trees', 'hills_B_trees', 'hills_C_trees',
       'trees_A_large', 'trees_B_large', 'trees_A_medium', 'trees_B_medium', 'tree_single_A', 'tree_single_B', 'rock_single_C', 'rock_single_E',
       'cloud_big', 'cloud_small', 'flag_red', 'flag_blue'];
+    // cada .glb do pacote traz a MESMA imagem embutida: fica 1 textura por nome e as cópias são liberadas na hora
+    const TEX = {};
+    const dedupe = sc => (sc.traverse(o => {
+      const t = o.material?.map;
+      if (!t?.name) return;
+      const keep = (TEX[t.name] ||= t);
+      if (keep !== t) { t.source.data?.close?.(); o.material.map = keep; }
+    }), sc);
     await Promise.all([
-      ...D_NAMES.map(async n => { D[n] = (await loader.loadAsync(`assets/env/dungeon/${n}.glb`)).scene; }),
-      ...X_NAMES.map(async n => { X[n] = (await loader.loadAsync(`assets/env/hex/${n}.gltf`)).scene; }),
+      ...D_NAMES.map(async n => { D[n] = dedupe((await loader.loadAsync(`assets/env/dungeon/${n}.glb`)).scene); }),
+      ...X_NAMES.map(async n => { X[n] = dedupe((await loader.loadAsync(`assets/env/hex/${n}.gltf`)).scene); }),
     ]);
-    const lists = { floor: [], near: [], far: [] };
+    // ring = perto da luta (contorno + sombra sempre); walls = muro/torres/estandartes (contorno e sombra só na qualidade alta)
+    const lists = { floor: [], ring: [], walls: [], far: [] };
     const put = (list, src, x, y, z, ry = 0, s = 1, sy = s) => lists[list].push({ src, m: new THREE.Matrix4().compose(_p.set(x, y, z).clone(), new THREE.Quaternion().setFromAxisAngle(UP, ry), new THREE.Vector3(s, sy, s)) });
     const rnd = rng(42), pick = arr => arr[(rnd() * arr.length) | 0];
     const ringRot = a => -a - Math.PI / 2; // peça deitada na tangente do círculo, frente pro centro
@@ -164,7 +201,8 @@ export function createArena(scene) {
     const TILE = 4 * DS, topY = -0.15 * DS;
     for (let gx = -8; gx <= 8; gx++) for (let gz = -8; gz <= 8; gz++) {
       const x = (gx + 0.5) * TILE - TILE / 2, z = (gz + 0.5) * TILE - TILE / 2;
-      if (Math.hypot(Math.abs(x) - TILE / 2, Math.abs(z) - TILE / 2) > S0 + 1) continue;
+      // ladrilho que fica todo debaixo da arquibancada não aparece (só perto dos portões ele aparece na fresta)
+      if (Math.hypot(Math.abs(x) - TILE / 2, Math.abs(z) - TILE / 2) > S0 + (Math.abs(x) < 4 ? 1 : 0.2)) continue;
       if (rnd() < 0.18) { // 4 ladrilhos pequenos
         for (const [ox, oz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) put('floor', D[pick(['floor_tile_small', 'floor_tile_small', 'floor_tile_small_broken_A', 'floor_tile_small_weeds_A'])], x + ox * TILE / 4, topY, z + oz * TILE / 4, ((rnd() * 4) | 0) * Math.PI / 2, DS);
       } else put('floor', D.floor_tile_large, x, topY, z, ((rnd() * 4) | 0) * Math.PI / 2, DS);
@@ -177,7 +215,7 @@ export function createArena(scene) {
     const chord = 2 * RB * Math.sin(Math.PI / NB);
     for (let i = 0; i < NB; i++) {
       const a = (i / NB) * Math.PI * 2;
-      lists.near.push({ src: D.barrier_column, m: new THREE.Matrix4().compose(new THREE.Vector3(Math.cos(a) * RB, 0, Math.sin(a) * RB), new THREE.Quaternion().setFromAxisAngle(UP, ringRot(a)), new THREE.Vector3(chord / 4, DS, DS)) });
+      lists.ring.push({ src: D.barrier_column, m: new THREE.Matrix4().compose(new THREE.Vector3(Math.cos(a) * RB, 0, Math.sin(a) * RB), new THREE.Quaternion().setFromAxisAngle(UP, ringRot(a)), new THREE.Vector3(chord / 4, DS, DS)) });
     }
 
     // tochas e estandartes encostam na face de verdade de pilares/muro: um raio sai do lado de dentro e acha a parede
@@ -192,21 +230,21 @@ export function createArena(scene) {
       const n = h.face.normal.clone().transformDirection(h.object.matrixWorld).setY(0).normalize();
       return { x: h.point.x, z: h.point.z, n, ry: Math.atan2(n.x, n.z) }; // ry: frente da peça (+Z) = pra fora da parede
     };
-    const torch = (x, y, z, dx, dz, s, light) => {
+    const torch = (list, x, y, z, dx, dz, s, light) => {
       const m = mountAt(x, y, z, dx, dz);
       if (!m) return;
-      put('near', D.torch_mounted, m.x, y, m.z, m.ry, s);
+      put(list, D.torch_mounted, m.x, y, m.z, m.ry, s);
       flame(m.x + m.n.x * 0.47 * s, y + 0.78 * s, m.z + m.n.z * 0.47 * s, 0.55 + 0.3 * s, light);
     };
 
     // pilares de pedra com tocha virada pro centro
     for (const p of pillars) {
-      put('near', D.pillar, p.x, 0, p.z, -p.a, 1.15);
-      mountable(lists.near[lists.near.length - 1]);
+      put('ring', D.pillar, p.x, 0, p.z, -p.a, 1.15);
+      mountable(lists.ring[lists.ring.length - 1]);
     }
     for (const p of pillars) {
       const ix = -Math.cos(p.a), iz = -Math.sin(p.a); // pro centro
-      torch(p.x + ix * 3, 2.2, p.z + iz * 3, -ix, -iz, 1.1, true);
+      torch('ring', p.x + ix * 3, 2.2, p.z + iz * 3, -ix, -iz, 1.1, true);
     }
 
     // muro de fora com janelas em arco, pilastras, portões, estandartes e tochas
@@ -215,8 +253,8 @@ export function createArena(scene) {
     for (let i = 0; i < WALL_N; i++) {
       const a = Math.PI / 2 + (i / WALL_N) * Math.PI * 2, x = Math.cos(a) * RW, z = Math.sin(a) * RW;
       const gate = i === 0 || i === WALL_N / 2;
-      lists.near.push({ src: D[gate ? 'wall_doorway' : kinds[i % 4]], m: new THREE.Matrix4().compose(new THREE.Vector3(x, 0, z), new THREE.Quaternion().setFromAxisAngle(UP, ringRot(a)), new THREE.Vector3(wsx, wsy, wsx)) });
-      mountable(lists.near[lists.near.length - 1]);
+      lists.walls.push({ src: D[gate ? 'wall_doorway' : kinds[i % 4]], m: new THREE.Matrix4().compose(new THREE.Vector3(x, 0, z), new THREE.Quaternion().setFromAxisAngle(UP, ringRot(a)), new THREE.Vector3(wsx, wsy, wsx)) });
+      mountable(lists.walls[lists.walls.length - 1]);
     }
     for (let i = 0; i < WALL_N; i++) {
       const a = Math.PI / 2 + (i / WALL_N) * Math.PI * 2, x = Math.cos(a) * RW, z = Math.sin(a) * RW;
@@ -227,18 +265,18 @@ export function createArena(scene) {
         const name = i === 3 || i === WALL_N - 1 || Math.abs(i - WALL_N / 2) <= 3 ? `banner_shield_${side > 0 ? 'blue' : 'red'}`
           : team ? `banner_patternA_${team}` : pick(['banner_patternB_yellow', 'banner_patternC_green', 'banner_triple_white']);
         const m = mountAt(x + ix * 4, 4.2, z + iz * 4, -ix, -iz);
-        if (m) put('near', D[name], m.x, 2.67, m.z, m.ry, 0.72);
+        if (m) put('walls', D[name], m.x, 2.67, m.z, m.ry, 0.72);
       }
-      if (!gate && i % 4 === 0) torch(x + ix * 4, 4.0, z + iz * 4, -ix, -iz, 1, false); // na frente da pilastra
+      if (!gate && i % 4 === 0) torch('walls', x + ix * 4, 4.0, z + iz * 4, -ix, -iz, 1, false); // na frente da pilastra
       if (gate) for (const sx of [-1, 1]) { // tochas dos dois lados do portão
         const ox = Math.sin(a) * sx * 1.25, oz = -Math.cos(a) * sx * 1.25;
-        torch(x + ix * 3 + ox, 2.3, z + iz * 3 + oz, -ix, -iz, 1, false);
+        torch('walls', x + ix * 3 + ox, 2.3, z + iz * 3 + oz, -ix, -iz, 1, false);
       }
     }
     // 4 torres nas diagonais do muro (azuis do seu lado, vermelhas do outro), com bandeira
     for (let k = 0; k < 4; k++) {
       const a = Math.PI / 4 + k * Math.PI / 2, x = Math.cos(a) * (RW + 1.2), z = Math.sin(a) * (RW + 1.2);
-      put('near', X[z > 0 ? 'building_tower_A_blue' : 'building_tower_A_red'], x, -0.2, z, -a, 4.4);
+      put('walls', X[z > 0 ? 'building_tower_A_blue' : 'building_tower_A_red'], x, -0.2, z, -a, 4.4);
     }
     // caixotes, barris e armas no corredor entre a mureta e a arquibancada
     const props = ['barrel_large', 'barrel_small_stack', 'crates_stacked', 'keg', 'sword_shield', 'box_stacked'];
@@ -246,7 +284,7 @@ export function createArena(scene) {
       const a = (i / 14) * Math.PI * 2 + 0.2 + rnd() * 0.15;
       if (nearGate(a) < 0.3) continue;
       const wallHung = props[i % props.length] === 'sword_shield', name = props[i % props.length], r = wallHung ? S0 - 0.03 : R + 1.75;
-      put('near', D[name], Math.cos(a) * r, wallHung ? 0.42 : 0, Math.sin(a) * r, wallHung ? ringRot(a) : rnd() * 6.28, name === 'box_stacked' ? 0.42 : 0.55);
+      put('ring', D[name], Math.cos(a) * r, wallHung ? 0.42 : 0, Math.sin(a) * r, wallHung ? ringRot(a) : rnd() * 6.28, name === 'box_stacked' ? 0.42 : 0.55);
     }
 
     // ---- lá fora: vila, castelo, morros, montanhas e nuvens (bem grandes: de dentro só aparece o que passa do muro)
@@ -274,10 +312,22 @@ export function createArena(scene) {
       put('far', X[rnd() < 0.5 ? 'cloud_big' : 'cloud_small'], Math.cos(a) * r, 45 + rnd() * 35, Math.sin(a) * r, rnd() * 6.28, 7 + rnd() * 6);
     }
 
-    scene.add(bake(lists.floor, { outline: 0, cast: false }));
-    scene.add(bake(lists.near, { outline: 0.03 }));
-    scene.add(bake(lists.far, { outline: 0, cast: false, receive: false }));
+    // o longe vai em 8 fatias: o que fica atrás da câmera sai no recorte (~metade dos triângulos).
+    // Piso e muro não: da câmera da luta quase tudo aparece, fatiar só somaria desenhos.
+    scene.add(bake(lists.floor, { cast: false }));
+    scene.add(bake(lists.ring, { outline: 0.03 }));
+    walls = bake(lists.walls, { outline: 0.03 });
+    scene.add(walls);
+    scene.add(bake(lists.far, { cast: false, receive: false, sectors: 8 }));
+    buildFlames();
+    applyQuality();
   })();
+  let walls = null, quality = {};
+  function applyQuality() {
+    if (!walls) return;
+    for (const m of walls.children) { m.castShadow = quality.wallShadow !== false; for (const o of m.children) o.visible = quality.wallOutline !== false; }
+    torchOn = quality.torch !== false;
+  }
 
   const api = {
     R,
@@ -288,13 +338,12 @@ export function createArena(scene) {
     buildCrowd(renderer, camera) { const c = buildCrowd(renderer, camera, fans); crowd.add(c.mesh); crowdU = c.uniforms; },
     hype(n) { hype = Math.min(1.5, hype + n); }, // torcida vibra com golpe forte
     get hypeLevel() { return hype; },
+    // qualidade (main.js applyQuality): { wallOutline, wallShadow, torch } — false desliga
+    setQuality(q) { quality = q; applyQuality(); },
     update(t, dt) {
       hype = Math.max(0.15, hype - dt * 0.35);
-      for (const f of flames) { // fogo das tochas tremendo
-        const k = 1 + Math.sin(t * 17 + f.ph) * 0.08 + Math.sin(t * 29 + f.ph * 2) * 0.06;
-        f.s.scale.set(f.size * k, f.size * k * 1.25, 1);
-        if (f.l) f.l.intensity = 14 * k;
-      }
+      flameU.value = t; // fogo tremendo: no shader
+      for (const l of torchLights) l.v.w = torchOn ? 1 + Math.sin(t * 17 + l.ph) * 0.08 + Math.sin(t * 29 + l.ph * 2) * 0.06 : 0;
       // torcida: anima no shader (troca de quadro + pulinho), aqui só passa o tempo e a empolgação
       if (crowdU) { crowdU.uTime.value = t; crowdU.uHype.value = Math.min(1, hype); }
     },
@@ -348,25 +397,30 @@ function push(f, nx, nz, depth) {
 }
 
 // Junta os modelos posicionados numa malha por textura (todo pacote KayKit usa um atlas só) -> poucas draw calls.
-// Material toon (mesmo visual dos personagens); contorno preto só no que fica perto.
-function bake(list, { outline = 0, cast = true, receive = true } = {}) {
+// sectors: corta em fatias pelo ângulo (+ o miolo) pra o recorte de câmera tirar o que está atrás.
+// Material toon (mesmo visual dos personagens), 1 por atlas pra arena toda; contorno preto só no que fica perto.
+const MATS = new Map();
+function bake(list, { outline = 0, cast = true, receive = true, sectors = 0 } = {}) {
   const groups = new Map(), _w = new THREE.Matrix4();
   for (const { src, m } of list) {
+    const x = m.elements[12], z = m.elements[14];
+    const sec = !sectors ? 0 : Math.hypot(x, z) < 8 ? sectors : Math.floor(((Math.atan2(z, x) + Math.PI) / (2 * Math.PI)) * sectors) % sectors;
     src.updateMatrixWorld(true);
     src.traverse(o => {
       if (!o.isMesh) return;
       const g = o.geometry.clone().applyMatrix4(_w.multiplyMatrices(m, o.matrixWorld));
       for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
       if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
-      const flat = g.index ? g.toNonIndexed() : g;
-      const key = o.material.map?.name || o.material.map?.uuid || '#' + o.material.color.getHexString();
-      if (!groups.has(key)) groups.set(key, { mat: o.material, geos: [] });
-      groups.get(key).geos.push(flat);
+      if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]); // indexado: ~metade dos vértices de antes (toNonIndexed)
+      const mk = o.material.map?.name || o.material.map?.uuid || '#' + o.material.color.getHexString(), key = mk + '|' + sec;
+      if (!groups.has(key)) groups.set(key, { mk, mat: o.material, geos: [] });
+      groups.get(key).geos.push(g);
     });
   }
   const out = new THREE.Group();
-  for (const { mat, geos } of groups.values()) {
-    const mesh = new THREE.Mesh(mergeGeometries(geos), toonMat(mat.map ? 0xffffff : mat.color, { map: mat.map || null }));
+  for (const { mk, mat, geos } of groups.values()) {
+    if (!MATS.has(mk)) MATS.set(mk, toonMat(mat.map ? 0xffffff : mat.color, { map: mat.map || null }));
+    const mesh = new THREE.Mesh(mergeGeometries(geos), MATS.get(mk));
     mesh.castShadow = cast;
     mesh.receiveShadow = receive;
     if (outline) addOutline(mesh, outline);

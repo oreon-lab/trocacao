@@ -41,7 +41,7 @@ export const T = {
   bounceSpeed: 9,       // velocidade contra a parede pra quicar
   wallSplatStun: 0.35,  // arremessado que bate na parede fica atordoado mais tempo
   // GIRO DO FURACÃO (G): agarra pelas mãos quem estiver colado na frente, gira e arremessa pra onde mira
-  grabCooldown: 10,     // segundos até poder agarrar de novo (depois de pegar)
+  grabCooldown: 12,     // segundos até poder agarrar de novo (depois de pegar); o giro não gasta energia
   grabWhiffCd: 2,       // errou o agarrão: espera isso (e não gasta energia)
   spinTime: 1.15,       // duração máxima do giro (solta antes se a mira cruzar)
   spinMin: 0.85,        // gira pelo menos isso
@@ -66,7 +66,7 @@ export const T = {
   arenaMin: 10.5,       // raio final (pilares ficam em ~8.8)
 
   // slide
-  slideMinSpeed: 7,
+  slideMinSpeed: 9,     // acima da caminhada (7.5): slide só correndo ou depois do dash
   slideBoost: 3,
   slideDecel: 6,
   slideMaxTime: 0.9,
@@ -84,15 +84,16 @@ export const T = {
   critKnock: 2.2,
   // energia (0-100) e poderes
   meterMax: 100,
-  costQ: 35,            // E: habilidade do lutador (a ação continua chamada 'q' no código)
-  costR: 100,           // R: super soco
-  powerBuffer: 0.45,    // E/R/G apertado no meio de outro golpe (ou tonto) fica guardado e sai assim que der
-  superRange: 6.5,      // o super voa até o oponente se ele estiver até essa distância (mais longe: avisa e não gasta)
+  powerBuffer: 0.45,    // habilidade/G apertado no meio de outro golpe (ou tonto) fica guardado e sai assim que der
   grabRange: 3.6,       // o giro do furacão puxa o oponente até essa distância
-  costG: 70,            // G: giro do furacão (gasta muita energia; só sai se pegar)
+  costG: 0,             // (o giro não gasta mais energia: só a ULT gasta)
+  gainPunch: 5,         // energia por soco que acertou (habilidade: campo meter dela; ULT não enche)
+  gainMinion: 2,        // energia por lacaio quebrado
   parryWindow: 0.15,
   assistCone: 0.85,     // cos do ângulo da mira assistida (~32°)
   assistRange: 1.4,     // alcance extra em que a mira assistida "puxa" o soco
+  tpsMagnetRange: 5.5,  // 3ª pessoa: oponente até essa distância e dentro desse ângulo da câmera = o golpe vai nele
+  tpsMagnetAngle: 0.8,  // (~46° pra cada lado)
   comboDecay: 0.2,      // cada hit seguido atordoa 20% menos (sem stunlock infinito)
   comboMax: 4,          // 4º hit seguido arremessa e zera o combo
   arenaRadius: 16,
@@ -103,41 +104,10 @@ export const ATTACKS = {
   light: { windup: 0.09, active: 0.09, recovery: 0.16, dmg: 6, range: 2.3, hitR: 0.42, knock: 3.5, up: 0, stun: 0.34 },
   heavy: { windup: 0.34, active: 0.1, recovery: 0.38, dmg: 16, range: 2.6, hitR: 0.45, knock: 15, up: 4.5, stun: 0.55, guardBreak: true, moveMul: 0.4 },
   lunge: { windup: 0.03, active: 0.12, recovery: 0.28, dmg: 11, range: 2.6, hitR: 0.45, knock: 9, up: 1.5, stun: 0.4 },
-  super: { windup: 0.45, active: 0.18, recovery: 0.5, dmg: 26, range: 2.7, hitR: 0.6, knock: 16, up: 7, stun: 0.9, guardBreak: true, moveMul: 0.2 },
-  // habilidades (E) — special: sem o passinho automático; cada uma tem o próprio movimento no fighter
-  slam: { windup: 0.5, active: 0.06, recovery: 0.5, dmg: 17, radius: 4.6, knock: 10, up: 7, stun: 0.7, aoe: true, low: true, special: true, moveMul: 0.25 },
-  charge: { windup: 0.2, active: 0.5, recovery: 0.4, dmg: 14, range: 1.9, hitR: 0.7, knock: 15, up: 4, stun: 0.7, guardBreak: true, armor: true, special: true, speed: 16, moveMul: 0.1 },
-  blink: { windup: 0.16, active: 0.36, hitDelay: 0.16, recovery: 0.35, dmg: 15, range: 2.3, hitR: 0.55, knock: 8, up: 2, stun: 0.6, guardBreak: true, special: true, moveMul: 0.3 },
-  meteor: { windup: 0.4, active: 0.05, recovery: 0.35, ranged: true, special: true, moveMul: 0.4 },
-  meteorHit: { dmg: 18, radius: 2.3, delay: 0.95, knock: 10, up: 7, stun: 0.65 },
   grab: { windup: 0.05, active: 0.14, recovery: 0.35, dmg: 0, range: 2.1, hitR: 0.6, knock: 0, up: 0, stun: 0 },
-  // ---- habilidades dos lutadores novos ----
-  // Encapuzada: 3 adagas em leque (projéteis; quem lançou decide o acerto)
-  daggers: { windup: 0.3, active: 0.05, recovery: 0.32, ranged: true, special: true, moveMul: 0.5 },
-  daggerHit: { dmg: 6, knock: 3.5, up: 0, stun: 0.32, count: 3, spread: 0.24, speed: 26, range: 18 },
-  // Ossudo: gira indo atrás do oponente, acerta em volta a cada tick; o último quebra a defesa e arremessa
-  whirl: { windup: 0.16, active: 1.1, recovery: 0.45, dmg: 5, radius: 2.3, knock: 2.5, up: 0, stun: 0.32, special: true, tick: 0.27, speed: 5.5, moveMul: 0 },
-  whirlEnd: { dmg: 9, knock: 13, up: 6, stun: 0.7, guardBreak: true },
-  // Necromante: círculo no chão; depois do delay sobem espetos e quem estiver dentro fica preso (root)
-  cage: { windup: 0.38, active: 0.05, recovery: 0.35, ranged: true, special: true, moveMul: 0.4 },
-  cageHit: { dmg: 8, knock: 0, up: 0, stun: 0.25, root: 1.6, radius: 2.1, delay: 0.6 },
-  // Sombra: avança atravessando o oponente (invencível) e corta; envenena (dano por segundo)
-  venom: { windup: 0.14, active: 0.3, recovery: 0.4, dmg: 7, knock: 4, up: 0, stun: 0.4, special: true, poison: 4, poisonDps: 2.5, moveMul: 0 },
-  // Lacaio: 2 mini-esqueletos saem do chão, correm atrás do oponente e explodem; um golpe destrói
-  summon: { windup: 0.5, active: 0.05, recovery: 0.4, ranged: true, special: true, moveMul: 0.3 },
-  minionHit: { dmg: 8, knock: 7, up: 5, stun: 0.45, speed: 6.5, life: 4.5, rise: 0.6 },
+  // habilidades dos lutadores: src/abilities/<Lutador>.js (registradas aqui como '<Lutador>.a1' etc.)
   sweep: { windup: 0.04, active: 0.15, recovery: 0.35, dmg: 10, range: 2.2, hitR: 0.55, knock: 4, up: 8.5, stun: 0.7, low: true },
 };
 
-// habilidade própria de cada lutador (E) e a cor do tema dele (efeitos da habilidade e do super)
-export const SPECIALS = {
-  Barbarian: { kind: 'slam', name: 'TERREMOTO', color: 0xff7a2f },
-  Knight: { kind: 'charge', name: 'INVESTIDA SAGRADA', color: 0xffd23f },
-  Rogue: { kind: 'blink', name: 'PASSO SOMBRIO', color: 0xa05cff },
-  Mage: { kind: 'meteor', name: 'METEORO', color: 0x4fc8ff },
-  Rogue_Hooded: { kind: 'daggers', name: 'LEQUE DE ADAGAS', color: 0x3fe0b0 },
-  Skeleton_Warrior: { kind: 'whirl', name: 'RODA DE OSSOS', color: 0xf2e6c4 },
-  Skeleton_Mage: { kind: 'cage', name: 'PRISÃO DE OSSOS', color: 0xb46bff },
-  Skeleton_Rogue: { kind: 'venom', name: 'LÂMINA VENENOSA', color: 0x7dff4a },
-  Skeleton_Minion: { kind: 'summon', name: 'EXÉRCITO DE OSSOS', color: 0xffe14d },
-};
+// nome/cor da habilidade marca de cada lutador: preenchido por src/abilities/index.js (menu e check.html leem)
+export const SPECIALS = {};

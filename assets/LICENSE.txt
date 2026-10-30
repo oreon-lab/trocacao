@@ -7,4 +7,4 @@ Cenário: KayKit Dungeon Remastered 1.0 e KayKit Medieval Hexagon Pack 1.0 por K
 https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0
 https://github.com/KayKit-Game-Assets/KayKit-Medieval-Hexagon-Pack-1.0
 
-Sons: vários autores, todos CC0 (OpenGameArt.org) — lista completa em assets/sfx/CREDITS.txt
+Sons: vários autores (OpenGameArt.org), CC0, exceto a torcida de fundo: "Free Crowd Cheering Sounds" por Gregor Quendel (www.gregorquendel.com), CC-BY 4.0 — lista completa em assets/sfx/CREDITS.txt

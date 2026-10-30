@@ -34,5 +34,7 @@ PODERES E EFEITOS
 LOCUTOR E TORCIDA
 - "Voiceover Pack: Fighter" — Kenney — CC0 — https://opengameart.org/content/voiceover-pack-fighter-40-taunts
 - "Arena Combat Announcer Pack" — blacklodgegames — CC0 — https://opengameart.org/content/27-metal-audio-samples-sfx
-- "Crowd shouting/speaking ambience" — StarNinjas — CC0 — https://opengameart.org/content/crowd-shoutingspeaking-ambience
+- "Free Crowd Cheering Sounds" — Gregor Quendel (www.gregorquendel.com) — CC-BY 4.0 — https://opengameart.org/content/free-crowd-cheering-sounds
+    torcida de fundo (crowd = 07 Soft cheering and chatter; crowd_hype = 02 Strong cheering and soft rhythmic cheering),
+    cortadas em loop e com volume normalizado
 - "Applause in a large hall or church" — eXpl0it3r — CC0 — https://opengameart.org/content/applause-in-a-large-hall-or-church

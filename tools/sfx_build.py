@@ -22,6 +22,7 @@ YELL = 'yelling_sounds/yelling sounds/{}.wav'
 AXE = 'medieval_sfx_textures_2_of_2/Axe Swing.wav'
 DAGGER = 'medieval_sfx_textures_2_of_2/Dagger Swing.wav'
 SWOSH = 'swoshes/swosh-{:02d}.flac'
+CROWD = 'Gregor Quendel - Free Crowd Cheering Sounds - MP3/Gregor Quendel - Crowd Cheering Sounds - {}.mp3'
 QP = 'qubodupPunch/qubodupPunch/qubodupPunch{:02d}.ogg'
 SOUNDS = {
     # socos: "tum" limpo da Kenney + estalo curto por cima (definição) + baque grave de corpo no pesado
@@ -67,7 +68,8 @@ SOUNDS = {
     'rumble': ('sci-fi_sounds/Audio/thrusterFire_000.ogg', {'gain': -3}),
     'bell': (C0.format('bell_01'), {}), 'gong': (C0.format('gong_01'), {}),
     # ambiente (estéreo, em loop)
-    'crowd': ('../zips/crowd_shouting_0.ogg', {'loop': True, 'stereo': True}),
+    'crowd': (CROWD.format('07 - Soft cheering and chatter'), {'loop': True, 'stereo': True}),
+    'crowd_hype': (CROWD.format('02 - Strong cheering and soft rhythmic cheering'), {'loop': True, 'stereo': True}),
     'wind': ('../zips/wind_woosh_loop.ogg', {'loop': True, 'stereo': True}),
     'applause': ('../zips/applause-clapping-church-crowd-immersive.wav', {'seg': (23.5, 30.0), 'stereo': True}),
     # locutor

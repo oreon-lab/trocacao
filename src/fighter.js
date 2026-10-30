@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { T, ATTACKS, SPECIALS } from './config.js';
+import { T, ATTACKS } from './config.js';
+import * as AB from './abilities/index.js';
 
 // Eventos de gameplay (hit, dash, pulo...) que o main transforma em som/partícula/shake.
 export const events = [];
@@ -12,10 +13,13 @@ const _o = new THREE.Vector3(), _e = new THREE.Vector3(), _d = new THREE.Vector3
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _hit = new THREE.Vector3();
 
 // Input abstrato: o jogador (teclado/mouse) e o bot preenchem a mesma coisa.
-// mx = direita, mz = frente. jump/dash/light/heavy são "apertou neste frame" e são consumidos.
+// mx = direita, mz = frente. jump/dash/light/heavy/a1.. são "apertou neste frame" e são consumidos.
+// blockTap = apertou a defesa agora (parry só vale no aperto, não segurando).
 export function emptyInput() {
-  return { mx: 0, mz: 0, yaw: 0, pitch: 0, jump: false, jumpHeld: false, dash: false, dashX: 0, dashZ: 0, crouch: false, light: false, heavy: false, block: false, dodge: false, grab: false, q: false, r: false };
+  return { mx: 0, mz: 0, yaw: 0, pitch: 0, jump: false, jumpHeld: false, dash: false, dashX: 0, dashZ: 0, crouch: false, light: false, heavy: false, block: false, blockTap: false, dodge: false, grab: false, a1: false, a2: false, a3: false, ult: false };
 }
+const EDGES = ['jump', 'dash', 'light', 'heavy', 'dodge', 'grab', 'blockTap', 'a1', 'a2', 'a3', 'ult'];
+export const clearEdges = I => { for (const k of EDGES) I[k] = false; I.dashX = I.dashZ = 0; };
 
 // Distância mínima entre os segmentos p1q1 e p2q2; escreve em `out` o ponto mais próximo do primeiro.
 export function segSeg(p1, q1, p2, q2, out) {
@@ -33,11 +37,9 @@ export function segSeg(p1, q1, p2, q2, out) {
   return Math.sqrt(qx * qx + qy * qy + qz * qz);
 }
 
-// até onde cada poder mira sozinho no oponente (terremoto é em volta, não precisa)
-const POWER_AIM = { super: T.superRange, charge: 13, blink: 12, meteor: 22, grab: T.grabRange, daggers: 18, cage: 16, venom: 9 };
-
 // golpe crítico: muito mais dano e arremessa lá pra trás
 export const critDef = def => ({ ...def, dmg: def.dmg * T.critMul, knock: def.knock * T.critKnock, up: Math.max(def.up, 5), stun: def.stun * 1.4 });
+const PUNCHES = ['light', 'heavy', 'lunge', 'sweep'];
 
 export class Fighter {
   constructor(name, color) {
@@ -48,7 +50,7 @@ export class Fighter {
     this.dashDir = new THREE.Vector3();
     this.dashLocal = { x: 0, z: 1 };
     this.input = emptyInput();
-    this.char = 'Barbarian'; // define a habilidade do Q
+    this.char = 'Barbarian'; // define as habilidades (src/abilities/<char>.js)
     this.reset(new THREE.Vector3(), 0);
   }
 
@@ -60,38 +62,36 @@ export class Fighter {
     Object.assign(this, {
       height: T.standHeight, grounded: true, coyoteT: 0, jumpBufT: 0, jumpCutDone: true,
       crouching: false, sliding: false, slideT: 0, slideLock: false,
-      dashT: 0, dashCd: 0, charges: T.dashCharges, rechargeT: 0, airDashes: 0, airJumps: 0, sinceDash: 9, sprinting: false, bounced: false,
-      hp: T.hp, stunT: 0, blocking: false, blockT: 0,
+      dashT: 0, dashT0: 0, dashIF: 0, dashV: T.dashSpeed, dashCd: 0, charges: T.dashCharges, rechargeT: 0, airDashes: 0, airJumps: 0, sinceDash: 9, sprinting: false, bounced: false,
+      hp: T.hp, stunT: 0, blocking: false, parryT: 0, parryLock: 0, lastDmg: 0,
       atk: null, queued: null, queueT: 0, hand: 1, flashT: 0, ko: false, // hand 1 -> 1º soco rápido = jab (esquerda)
       walkPhase: 0, landImpact: 0, comboN: 0, comboT: 0, tell: null,
-      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, grab: null, heldBy: null, thrown: null, grabCd: 0, power: null, powerT: 0, rootT: 0, poisonT: 0, poisonDps: 0, poisonBy: null,
+      invulnT: 0, counterT: 0, meter: 0, dodgeSide: 1, incoming: 0, danger: null, grab: null, heldBy: null, thrown: null, grabCd: 0, power: null, powerT: 0,
+      st: {}, dr: {}, slots: null, _ab: null, // status (preso, veneno...), retorno decrescente, recargas das habilidades
     });
+    AB.recompute(this);
   }
 
   get eyeY() { return this.pos.y + this.height * T.eyeRatio; }
-  get invuln() { return this.invulnT > 0 || (this.dashT > 0 && T.dashTime - this.dashT < T.dashIFrames); }
+  // invencível: esquiva perfeita/habilidade (invulnT) ou começo do dash (dashIF do dash atual)
+  get invuln() { return this.invulnT > 0 || (this.dashT > 0 && this.dashT0 - this.dashT < this.dashIF); }
   gain(n) { this.meter = clamp(this.meter + n, 0, T.meterMax); }
 
-  // janela da esquiva perfeita: quanto falta (s) pro golpe/projétil chegar, se já dá pra apertar; -1 = ainda não
+  // janela da esquiva perfeita: quanto falta (s) pro golpe/projétil chegar, se já dá pra apertar; -1 = ainda não.
+  // Cada golpe abre a janela UMA vez (no máx. perfectWindow): golpe longo (investida, giro) não deixa esquivar a qualquer hora.
   perfectLeft(foe) {
-    if (this.incoming > 0) return this.incoming; // projétil quase batendo (o main marca quanto falta)
+    if (this.incoming > 0) return this.incoming; // projétil/zona quase batendo (world.js marca quanto falta)
     if (!foe || foe.ko) return -1;
-    const a = foe.atk;
-    if (a && !a.hit && !a.done && !a.def.ranged) {
-      const d = a.def, dist = Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z);
-      const left = a.phase === 'windup' ? d.windup - a.t + (d.hitDelay || 0) : a.phase === 'active' ? Math.max(0, (d.hitDelay || 0) - a.t) : 9;
-      const near = d.aoe ? dist < d.radius + 0.5
-        : a.kind === 'whirl' ? dist < d.radius + 0.9
-        : a.kind === 'venom' ? (a.phase === 'windup' ? dist < 9 : dist < 2.5)
-        : a.kind === 'blink' ? dist < 13
-        : a.kind === 'charge' ? (a.phase === 'active' ? foe.inCone(this, d.range + d.speed * T.perfectWindow + 0.6, 0.5) > 0 : dist < 4)
-        : foe.reach(this, d) < 0.9;
-      if (left <= T.perfectWindow && near) return Math.max(0, left);
-    }
-    const tl = foe.tell; // bot armando o golpe (ainda vai apertar e depois tem o windup)
-    if (tl && !tl.pressed && tl.dur - tl.el < 0.08 && Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 3)
-      return Math.min(T.perfectWindow, tl.dur - tl.el + (ATTACKS[tl.kind]?.windup || 0.1));
-    return -1;
+    const a = foe.atk, d = a?.def;
+    if (!a || a.hit || a.done || (a.phase !== 'windup' && a.phase !== 'active')) return -1;
+    const dist = Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z);
+    const left = a.phase === 'windup' ? d.windup - a.t + (d.hitDelay || 0) : Math.max(0, (d.hitDelay || 0) - a.t);
+    if (left > T.perfectWindow) return -1;
+    const near = d.perfectNear ? d.perfectNear(foe, this, a, dist) : d.radius && !d.range ? dist < d.radius + 0.5 : d.range ? foe.reach(this, d) < 0.9 : false;
+    if (!near) return -1;
+    const age = a.t + (a.phase === 'active' ? d.windup : 0);
+    a.pw ??= age;
+    return age - a.pw <= T.perfectWindow ? left : -1;
   }
   perfectWindow(foe) { return this.perfectLeft(foe) >= 0; }
   forward(out) { return out.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)); }
@@ -102,7 +102,9 @@ export class Fighter {
 
   update(dt, foe, arena) {
     const I = this.input;
-    const canAct = this.stunT <= 0 && !this.ko;
+    AB.ended(this, foe); // habilidade cortada (golpe do outro, KO...) desde o último passo
+    AB.tick(this, dt);  // recargas + status (veneno, preso...)
+    const canAct = this.stunT <= 0 && !this.ko, rooted = !!this.m.root;
     if (!this.ko) { this.yaw = I.yaw; this.pitch = I.pitch; } // caído não gira
 
     // timers
@@ -111,14 +113,8 @@ export class Fighter {
     this.counterT = Math.max(0, this.counterT - dt);
     this.incoming = Math.max(0, this.incoming - dt);
     this.flashT = Math.max(0, this.flashT - dt);
-    this.rootT = Math.max(0, this.rootT - dt); // preso pela Prisão de Ossos: não anda, não pula, não dá dash
-    if (this.poisonT > 0) { // Lâmina Venenosa: perde vida aos poucos
-      this.poisonT -= dt;
-      if (!this.ko && !this.remote) {
-        this.hp -= this.poisonDps * dt;
-        if (this.hp <= 0) { this.checkKO(); events.push({ type: 'poisonKO', f: this.poisonBy, victim: this }); }
-      }
-    }
+    this.parryT = Math.max(0, this.parryT - dt);
+    this.parryLock = Math.max(0, this.parryLock - dt);
     this.grabCd = Math.max(0, this.grabCd - dt);
     this.dashCd -= dt;
     this.sinceDash += dt;
@@ -133,8 +129,7 @@ export class Fighter {
     // giro do furacão: quem gira controla tudo; quem é girado só é carregado
     if (this.heldBy || this.grab) {
       if (this.grab) this.updateGrab(dt, arena);
-      I.jump = I.dash = I.light = I.heavy = I.dodge = I.grab = I.q = I.r = false;
-      I.dashX = I.dashZ = 0;
+      clearEdges(I);
       return;
     }
 
@@ -142,7 +137,7 @@ export class Fighter {
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
     const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
     let wx = 0, wz = 0;
-    if (canAct && this.rootT <= 0) {
+    if (canAct && !rooted) {
       wx = fx * I.mz + rx * I.mx;
       wz = fz * I.mz + rz * I.mx;
       const wl = Math.hypot(wx, wz);
@@ -150,15 +145,13 @@ export class Fighter {
     }
     let hs = Math.hypot(this.vel.x, this.vel.z);
 
-    // defesa
-    const wantBlock = canAct && I.block && !this.atk && !this.sliding && this.dashT <= 0;
-    if (wantBlock && !this.blocking) this.blockT = 0;
-    this.blocking = wantBlock;
-    if (this.blocking) this.blockT += dt;
+    // defesa. Parry = APERTAR a defesa na hora (0.15s); apertar à toa trava o parry meio segundo. Segurar só defende.
+    this.blocking = canAct && I.block && !this.atk && !this.sliding && this.dashT <= 0;
+    if (I.blockTap && canAct && this.parryLock <= 0) { this.parryT = T.parryWindow; this.parryLock = 0.5; }
 
     // agachar / slide (segurar agachar durante o dash = slide quando o dash acaba)
     if (!I.crouch) this.slideLock = false;
-    if (canAct && this.rootT <= 0 && I.crouch && this.grounded && !this.sliding && !this.slideLock && this.dashT <= 0 && hs > T.slideMinSpeed) {
+    if (canAct && !rooted && I.crouch && this.grounded && !this.sliding && !this.slideLock && this.dashT <= 0 && hs > T.slideMinSpeed) {
       this.sliding = true;
       this.slideT = 0;
       const k = (hs + T.slideBoost) / hs;
@@ -177,9 +170,11 @@ export class Fighter {
     const hTarget = this.sliding ? T.slideHeight : this.crouching ? T.crouchHeight : T.standHeight;
     this.height = damp(this.height, hTarget, 18, dt);
 
+    // habilidade que não deixa cancelar no dash (o dash dela é dela)
+    const lockedAtk = this.atk?.def.slot && !this.atk.def.dashCancel && this.atk.phase !== 'recovery';
     // esquiva (Q): desvio rápido pro lado (ou pra onde o WASD aponta). Na hora certa = ESQUIVA PERFEITA:
     // não gasta carga, fica invencível mais tempo, dá contra-ataque e energia.
-    if (I.dodge && canAct && this.rootT <= 0 && this.dashCd <= 0) {
+    if (I.dodge && canAct && !rooted && !lockedAtk && this.dashCd <= 0) {
       const perfect = this.perfectWindow(foe);
       if (perfect || this.charges > 0) {
         I.dash = true;
@@ -189,14 +184,14 @@ export class Fighter {
           this.charges++;
           this.invulnT = T.perfectIFrames;
           this.counterT = T.counterTime;
-          this.gain(25);
+          this.gain(20);
           events.push({ type: 'perfect', f: this });
         }
       }
     }
 
     // dash: direção do WASD (ou do toque duplo); sem direção = pra frente
-    if (I.dash && canAct && this.rootT <= 0 && this.charges > 0 && this.dashCd <= 0 && (this.grounded || this.airDashes < 1)) {
+    if (I.dash && canAct && !rooted && !lockedAtk && this.charges > 0 && this.dashCd <= 0 && (this.grounded || this.airDashes < 1)) {
       let dx = I.dashX, dz = I.dashZ;
       if (!dx && !dz) { dx = I.mx; dz = I.mz; }
       if (!dx && !dz) dz = 1;
@@ -209,17 +204,12 @@ export class Fighter {
         this.dashDir.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize();
         events.push({ type: 'chase', f: this });
       }
-      this.dashT = T.dashTime;
-      this.dashCd = T.dashTime + T.dashCooldown;
+      Object.assign(this, { dashT: T.dashTime, dashT0: T.dashTime, dashIF: T.dashIFrames, dashV: T.dashSpeed, dashCd: T.dashTime + T.dashCooldown, sliding: false, sinceDash: 0, blocking: false, bounced: false });
       this.charges--;
       if (!this.grounded) this.airDashes++;
-      this.sliding = false;
-      this.sinceDash = 0;
-      this.blocking = false;
-      this.bounced = false;
       if (this.grounded && dz > 0.3) this.sprinting = true; // dash pra frente no chão emenda em corrida
-      // dash cancela golpe: finta no windup, e depois que acertou dá pra cancelar a qualquer hora e emendar
-      if (this.atk && (this.atk.phase !== 'active' || this.atk.hit)) this.atk = null;
+      // dash cancela o golpe (finta no windup, emenda depois de acertar). No active o golpe NÃO viaja junto com o dash.
+      this.atk = null;
       events.push({ type: 'dash', f: this });
     }
 
@@ -227,17 +217,20 @@ export class Fighter {
     if (!canAct || I.mz <= 0 || this.blocking || this.crouching || (this.atk && this.dashT <= 0)) this.sprinting = false;
 
     // velocidade
-    if (this.dashT > 0) {
+    if (this.atk?.drive) { // a habilidade manda (investida, giro...)
+      this.vel.x = this.atk.drive.x;
+      this.vel.z = this.atk.drive.z;
+    } else if (this.dashT > 0) {
       this.dashT -= dt;
-      const s = this.dashT > 0 ? T.dashSpeed : T.dashExitSpeed;
+      const s = this.dashT > 0 ? this.dashV : T.dashExitSpeed;
       this.vel.set(this.dashDir.x * s, 0, this.dashDir.z * s);
     } else if (this.sliding) {
       const k = Math.max(0, hs - T.slideDecel * dt) / hs;
       this.vel.x *= k; this.vel.z *= k;
     } else {
-      let max = this.crouching ? T.crouchSpeed : this.sprinting ? T.sprintSpeed : T.walkSpeed;
+      let max = (this.crouching ? T.crouchSpeed : this.sprinting ? T.sprintSpeed : T.walkSpeed) * this.m.move;
       if (this.blocking) max *= T.blockSpeedMul;
-      if (this.atk?.def.moveMul) max *= this.atk.def.moveMul;
+      if (this.atk?.def.moveMul !== undefined) max *= this.atk.def.moveMul;
       let tx = wx * max, tz = wz * max, rate;
       if (this.grounded) {
         const aligned = this.vel.x * tx + this.vel.z * tz >= 0;
@@ -257,14 +250,14 @@ export class Fighter {
     }
 
     // pulo (coyote time + buffer + altura variável)
-    if (this.jumpBufT > 0 && this.coyoteT > 0 && canAct && this.rootT <= 0 && this.dashT <= 0) {
+    if (this.jumpBufT > 0 && this.coyoteT > 0 && canAct && !rooted && this.dashT <= 0 && !lockedAtk) {
       this.vel.y = T.jumpVel;
       this.grounded = false;
       this.coyoteT = this.jumpBufT = 0;
       this.jumpCutDone = false;
       this.sliding = false;
       events.push({ type: 'jump', f: this });
-    } else if (I.jump && !this.grounded && this.pos.y > 0.4 && this.airJumps < 1 && canAct && this.rootT <= 0 && this.dashT <= 0 && !this.atk) {
+    } else if (I.jump && !this.grounded && this.pos.y > 0.4 && this.airJumps < 1 && canAct && !rooted && this.dashT <= 0 && !this.atk) {
       // pulo duplo: devolve o dash do ar (pula, dash, pula, dash)
       this.vel.y = T.doubleJumpVel;
       this.airJumps++;
@@ -295,112 +288,52 @@ export class Fighter {
     // golpes
     // clique durante o atordoamento fica guardado e sai assim que der (não some mais)
     if (!this.ko && (I.light || I.heavy)) { this.queued = I.heavy ? 'heavy' : 'light'; this.queueT = 0.25; }
-    // poderes: R = super soco, E = habilidade do lutador, G = giro do furacão.
-    // O aperto fica guardado um instante: sai assim que der (fim do golpe, fim do atordoamento, soltando a defesa).
-    // Soco que acertou pode ser cancelado direto no poder (combo). Se não der (energia, recarga, longe), avisa.
-    if (I.q || I.r || I.grab) { this.power = I.r ? 'r' : I.q ? 'q' : 'grab'; this.powerT = T.powerBuffer; }
+    // habilidades (a1 a2 a3 ult) e giro (G): o aperto fica guardado um instante e sai assim que der.
+    // Soco que ACERTOU pode ser cancelado direto na habilidade (combo); a ULT cancela também habilidade que acertou.
+    for (const k of ['ult', 'a3', 'a2', 'a1', 'grab']) if (I[k]) { this.power = k; this.powerT = T.powerBuffer; break; }
     if (this.power && (this.powerT -= dt) <= 0) this.power = null;
-    const cancel = this.atk && this.atk.hit && this.atk.phase === 'recovery' && ['light', 'heavy', 'lunge', 'sweep'].includes(this.atk.kind);
-    if (this.power && canAct && (!this.atk || cancel)) {
-      const why = this.usePower(this.power, foe);
+    const a0 = this.atk;
+    const cancel = a0 && a0.phase === 'recovery' && a0.landed && (PUNCHES.includes(a0.kind) || (this.power === 'ult' && a0.def.slot && !a0.def.ult));
+    if (this.power && canAct && (!a0 || cancel)) {
+      const why = this.power === 'grab' ? this.useGrab(foe) : AB.cast(this, this.power, foe);
       if (why) events.push({ type: 'deny', f: this, power: this.power, why });
       this.power = null;
     }
     if (this.queued && !this.atk && canAct && !this.blocking) this.startAttack(this.queued, foe);
     if (this.atk) {
-      const a = this.atk, d = a.def;
+      const a = this.atk, d = a.def, c = d.slot ? AB.ctx(this, foe, a) : null;
       a.t += dt;
-      if (a.kind === 'slam' && a.phase === 'windup') {
-        // pulinho roteirizado: sobe devagar, desce rápido e bate no chão bem no fim do windup
-        const u = a.t / d.windup, H = 1.3, W = d.windup;
-        this.vel.y = u < 0.7 ? (H * Math.PI / 2 / (0.7 * W)) * Math.cos((Math.PI / 2) * (u / 0.7)) : (-H * Math.PI / 2 / (0.3 * W)) * Math.sin((Math.PI / 2) * Math.min(1, (u - 0.7) / 0.3));
-      }
-      if (a.kind === 'charge' && a.phase === 'active' && !a.hit) { this.vel.x = a.dir.x * d.speed; this.vel.z = a.dir.z * d.speed; }
-      if (a.phase === 'windup' && a.t >= d.windup) {
+      c && d.onUpdate?.(c, dt);
+      if (this.atk === a && a.phase === 'windup' && a.t >= d.windup) {
         a.phase = 'active';
         a.t -= d.windup;
         events.push({ type: 'swing', f: this, kind: a.kind });
-        if (d.ranged) { a.hit = true; events.push({ type: 'fire', f: this, kind: a.kind }); } // solta a bola de energia
-        if (a.kind === 'super') { // avança voando até o oponente (mira automática: vai nele mesmo fora da mira)
-          const dd = foe ? (a.aim ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : this.inCone(foe, 7, 0.6)) : 0, f = this.forward(_d);
-          const v = dd ? clamp((dd - 1.2) * 6, 4, 26) : 10;
-          if (dd) f.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize();
-          this.vel.x = f.x * v;
-          this.vel.z = f.z * v;
-        }
-        if (a.kind === 'charge') { // investida reta: pro oponente se ele tá na frente, senão pra frente
-          const dd = foe ? (a.aim ? 1 : this.inCone(foe, 12, 0.6)) : 0;
-          a.dir = dd ? new THREE.Vector3(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize() : this.forward(new THREE.Vector3());
-        }
-        if (a.kind === 'blink') this.blinkTo(foe, arena);
-        if (d.aoe) { a.done = true; this.aoeHit(foe); }
-        if (a.kind === 'venom') { // Lâmina Venenosa: avança como um raio pro oponente (atravessa, invencível)
-          const tgt = a.aim && foe && !foe.ko;
-          this.dashDir.copy(tgt ? _d.set(foe.pos.x - this.pos.x, 0, foe.pos.z - this.pos.z).normalize() : this.forward(_d));
-          this.dashT = d.active;
-          this.invulnT = Math.max(this.invulnT, d.active + 0.05);
-          this.bounced = true; // não ricocheteia na parede
-        }
-        if (a.kind === 'whirl') a.tickT = 0;
+        c && d.onActive?.(c);
       }
-      if (a.kind === 'whirl' && a.phase === 'active' && this.atk === a) { // Roda de Ossos: gira indo atrás dele
-        if (foe && !foe.ko) {
-          const dx = foe.pos.x - this.pos.x, dz = foe.pos.z - this.pos.z, dd = Math.hypot(dx, dz);
-          if (dd > 1.1) { this.vel.x = dx / dd * d.speed; this.vel.z = dz / dd * d.speed; }
-        }
-        if ((a.tickT -= dt) <= 0) {
-          a.tickT += d.tick;
-          const last = a.t + d.tick > d.active;
-          this.spinHit(foe, last ? 'whirlEnd' : 'whirl');
-        }
+      if (this.atk === a && a.phase === 'active') {
+        if (!a.hit && !a.done && d.range && !(d.hitDelay && a.t < d.hitDelay)) this.tryHit(foe); // golpe corpo a corpo (soco ou habilidade com range)
+        if (this.atk === a && a.t >= d.active) { a.phase = 'recovery'; a.t -= d.active; }
       }
-      if (a.kind === 'venom' && a.phase === 'active' && !a.hit && foe && !foe.ko && !foe.invuln && this.atk === a) {
-        if (Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 1.3 && Math.abs(foe.pos.y - this.pos.y) < 1.4) {
-          _hit.set(foe.pos.x, foe.pos.y + foe.height * 0.55, foe.pos.z);
-          this.land(foe, d);
-        }
-      }
-      if (a.phase === 'active') {
-        if (!a.hit && !a.done && !(d.hitDelay && a.t < d.hitDelay) && a.kind !== 'whirl' && a.kind !== 'venom') this.tryHit(foe);
-        if (a.kind === 'charge' && a.hit && a.t < d.active) { a.t = d.active; this.vel.x *= 0.2; this.vel.z *= 0.2; } // bateu: para
-        if (this.atk && a.t >= d.active) { a.phase = 'recovery'; a.t -= d.active; }
-      }
-      // acertar encurta a recuperação = combos
-      if (this.atk && a.phase === 'recovery' && a.t >= d.recovery * (a.hit ? 0.6 : 1)) this.atk = null;
+      // acertar encurta a recuperação = combos (defendido não encurta)
+      if (this.atk === a && a.phase === 'recovery' && a.t >= d.recovery * (a.landed && d.landedCut !== false ? 0.6 : 1)) { a.phase = 'done'; this.atk = null; }
     }
-
-    I.jump = I.dash = I.light = I.heavy = I.dodge = I.grab = I.q = I.r = false;
-    I.dashX = I.dashZ = 0;
+    AB.ended(this, foe);
+    clearEdges(I);
   }
 
-  // usa o poder agora: null = saiu; senão o motivo ('meter' sem energia, 'cd' recarga, 'far' longe, 'online')
-  usePower(p, foe) {
+  // GIRO DO FURACÃO (G): só recarga, sem energia. null = saiu; senão o motivo ('cd', 'far', 'online')
+  useGrab(foe) {
     const d = foe && !foe.ko ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : Infinity;
-    let kind, cost;
-    if (p === 'r') {
-      kind = 'super'; cost = T.costR;
-      if (this.meter < cost) return 'meter';
-      if (d > T.superRange) return 'far';
-    } else if (p === 'q') {
-      kind = SPECIALS[this.char]?.kind || 'slam'; cost = T.costQ;
-      if (this.meter < cost) return 'meter';
-      if (kind === 'slam' && d > ATTACKS.slam.radius + 1.5) return 'far'; // terremoto é em volta: de longe não pega ninguém
-    } else {
-      kind = 'grab'; cost = 0; // a energia do giro só sai se pegar
-      if (!foe || foe.remote) return 'online';
-      if (this.grabCd > 0) return 'cd';
-      if (this.meter < T.costG) return 'meter';
-      if (d > T.grabRange) return 'far';
-      this.grabCd = T.grabWhiffCd;
-    }
-    this.meter -= cost;
+    if (!foe || foe.remote) return 'online';
+    if (this.grabCd > 0) return 'cd';
+    if (d > T.grabRange) return 'far';
+    this.grabCd = T.grabWhiffCd;
     this.atk = null; // cancela a recuperação do soco que acertou
     this.blocking = false;
     this.queued = null;
-    this.startAttack(kind, foe);
-    // mira automática: o poder vai no oponente se ele estiver no alcance, mesmo fora da mira da câmera
-    if (d <= (POWER_AIM[kind] || 0)) this.atk.aim = foe;
-    if (kind === 'grab' && d > 1.1) { // passo rápido até ele
+    this.startAttack('grab', foe);
+    this.atk.aim = foe; // mira automática
+    if (d > 1.1) { // passo rápido até ele
       const v = Math.min(10, (d - 1.0) * 6);
       this.vel.x += (foe.pos.x - this.pos.x) / d * v;
       this.vel.z += (foe.pos.z - this.pos.z) / d * v;
@@ -422,12 +355,11 @@ export class Fighter {
     else if (kind === 'light' && (this.dashT > 0 || this.sinceDash < 0.18 || this.sprinting)) k = 'lunge'; // soco voador
     const def = ATTACKS[k];
     this.atk = { id: (this.atkN = (this.atkN || 0) + 1), kind: k, def, t: 0, phase: 'windup', hit: false, hand: k === 'light' ? (this.hand ^= 1) : 1 };
-    // passo à frente: o soco "anda" até o oponente se ele tá quase no alcance
-    if (k === 'blink') this.invulnT = Math.max(this.invulnT, def.windup + 0.04); // some na fumaça
     if (k === 'grab') { this.dashT = 0; this.vel.multiplyScalar(0.2); } // freia o dash (senão atravessa o oponente)
-    const d = foe && k !== 'sweep' && !def.special && k !== 'super' && k !== 'grab' ? this.inCone(foe, 4.5, 0.75) : 0;
+    // passo à frente: o soco "anda" até o oponente se ele tá quase no alcance
+    const d = foe && k !== 'sweep' && k !== 'grab' ? this.inCone(foe, 4.5, 0.75) : 0;
     if (d > 1.1) {
-      const v = Math.min(k === 'lunge' || k === 'grab' ? 9 : k === 'heavy' ? 5 : 3.5, (d - 1.0) * 6);
+      const v = Math.min(k === 'lunge' ? 9 : k === 'heavy' ? 5 : 3.5, (d - 1.0) * 6);
       this.vel.x += (foe.pos.x - this.pos.x) / d * v;
       this.vel.z += (foe.pos.z - this.pos.z) / d * v;
     } else if (k === 'lunge') {
@@ -452,7 +384,7 @@ export class Fighter {
     if (d) {
       const yaw = Math.atan2(-(foe.pos.x - this.pos.x), -(foe.pos.z - this.pos.z));
       const up = Math.atan2(foe.pos.y + foe.height * 0.6 - _o.y, d);
-      const pitch = def.low ? 0 : this.atk?.aim === foe ? up : clamp(up, this.pitch - 0.15, this.pitch + 0.15); // poder com mira automática: altura certa
+      const pitch = def.low ? 0 : this.atk?.aim === foe ? up : clamp(up, this.pitch - 0.15, this.pitch + 0.15); // mira automática: altura certa
       const cp = Math.cos(pitch);
       _d.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
     }
@@ -467,27 +399,10 @@ export class Fighter {
     return segSeg(_o, _e, _a, _b, _hit) - (T.radius + def.hitR);
   }
 
-  // Passo Sombrio: aparece atrás do oponente (do lado contrário de onde ele olha), já virado pra ele
-  blinkTo(foe, arena) {
-    const from = this.pos.clone();
-    const fd = foe && !foe.ko ? Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) : 99;
-    if (fd < 12) {
-      foe.forward(_d);
-      this.pos.set(foe.pos.x - _d.x * 1.5, foe.pos.y, foe.pos.z - _d.z * 1.5);
-    } else this.pos.addScaledVector(this.forward(_d), 6);
-    const r = Math.hypot(this.pos.x, this.pos.z), lim = arena.R - T.radius - 0.2;
-    if (r > lim) { this.pos.x *= lim / r; this.pos.z *= lim / r; }
-    arena.collide(this);
-    this.vel.set(0, 0, 0);
-    if (fd < 12) this.yaw = this.input.yaw = Math.atan2(-(foe.pos.x - this.pos.x), -(foe.pos.z - this.pos.z));
-    events.push({ type: 'blink', f: this, from, to: this.pos.clone() });
-  }
-
   // ---- GIRO DO FURACÃO ----
   startGrab(foe) {
     this.atk = null;
-    this.meter -= T.costG; // pegou: agora sim gasta a energia e começa a recarga
-    this.grabCd = T.grabCooldown;
+    this.grabCd = T.grabCooldown; // pegou: começa a recarga
     this.grab = { victim: foe, t: 0, ang: Math.atan2(-(foe.pos.x - this.pos.x), -(foe.pos.z - this.pos.z)), prevD: 0, turns: 0 };
     Object.assign(foe, { heldBy: this, thrown: null, atk: null, tell: null, blocking: false, sliding: false, dashT: 0, sprinting: false, queued: null });
     this.sprinting = false;
@@ -521,20 +436,12 @@ export class Fighter {
     v.heldBy = null;
     v.pos.set(this.pos.x + aim.x * T.spinRadius, T.spinHeight, this.pos.z + aim.z * T.spinRadius);
     v.vel.set(aim.x * T.throwSpeed, T.throwUp, aim.z * T.throwSpeed);
-    Object.assign(v, { thrown: this, bounced: false, stunT: 1.1, flashT: 0.12, comboN: 0, comboT: 0, jumpCutDone: true, grounded: false });
+    Object.assign(v, { thrown: this, bounced: false, stunT: 1.1, flashT: 0.12, jumpCutDone: true, grounded: false }); // combo continua contando (sem zerar)
     v.hp -= T.throwDmg;
     v.checkKO();
     this.gain(10);
     this.dashCd = 0.15;
     events.push({ type: 'throw', f: this, victim: v, point: v.pos.clone(), from, dmg: T.throwDmg });
-  }
-
-  // Terremoto: onda no chão em volta; quem está no ar (pulou) escapa
-  aoeHit(foe) {
-    const d = this.atk.def, dist = Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z);
-    if (foe.ko || foe.invuln || dist > d.radius + T.radius || foe.pos.y > 0.5) return;
-    _hit.set(foe.pos.x, foe.pos.y + foe.height * 0.4, foe.pos.z);
-    this.land(foe, d);
   }
 
   tryHit(foe) {
@@ -550,98 +457,88 @@ export class Fighter {
       if (!this.atk.under) { this.atk.under = true; events.push({ type: 'under', f: foe, point: foe.pos.clone().setY(1) }); }
       return;
     }
-    this.land(foe, this.atk.def);
+    this.land(foe, this.atk.kind);
   }
 
-  // acertou (_hit = ponto do impacto)
-  // Roda de Ossos: um tick do giro acerta quem estiver em volta
-  spinHit(foe, kind) {
-    if (!foe || foe.ko || foe.invuln) return;
-    const r = ATTACKS.whirl.radius + T.radius;
-    if (Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) > r || foe.pos.y - this.pos.y > 1.6) return;
-    _hit.set(foe.pos.x, foe.pos.y + foe.height * 0.55, foe.pos.z);
-    this.land(foe, ATTACKS[kind], kind);
+  // acertou (_hit = ponto do impacto). Dano/online/evento: AB.deal (igual pra soco, habilidade, projétil)
+  land(foe, kind) {
+    const crit = kind === 'lunge' && Math.random() < T.critChance; // soco voador às vezes crita
+    AB.deal(this, foe, kind, _hit, { crit });
   }
 
-  land(foe, def, kindOverride) {
-    this.atk.hit = true;
-    const kind = kindOverride || this.atk.kind, point = _hit.clone();
-    // contra-ataque depois de uma esquiva perfeita: golpe mais forte
-    const mul = this.counterT > 0 ? T.counterMul : 1;
-    if (mul > 1) { def = { ...def, dmg: def.dmg * mul, knock: def.knock * 1.3 }; this.counterT = 0; }
-    const crit = kind === 'lunge' && Math.random() < T.critChance;
-    if (crit) def = critDef(def);
-    // online: quem apanha decide o resultado (defesa/parry/acerto) na máquina dele
-    if (foe.remote) return foe.onRemoteHit(kind, point, mul, crit);
-    const result = foe.receive(this, def);
-    this.gain(result === 'hit' ? 7 : result === 'break' ? 6 : result === 'block' ? 2 : 0);
-    if (result === 'hit' && this.charges < T.dashCharges) this.rechargeT += T.dashRecharge * T.dashHitRefund;
-    events.push({ type: result, f: this, victim: foe, kind, point, dmg: Math.round(def.dmg), combo: foe.comboN, counter: mul > 1, crit });
-  }
-
-  receive(att, def) {
-    let nx = this.pos.x - att.pos.x, nz = this.pos.z - att.pos.z;
-    const nl = Math.hypot(nx, nz) || 1;
+  // quem APANHA decide: escudo, armadura, defesa/parry/quebra, acerto (combo, status). o: { mul, counter, crit, dir:[x,z], by, x }
+  receive(att, def, o = {}) {
+    if (o.crit) def = critDef(def);
+    let nx, nz;
+    if (o.dir) { nx = o.dir[0]; nz = o.dir[1]; } else { nx = this.pos.x - att.pos.x; nz = this.pos.z - att.pos.z; }
+    let nl = Math.hypot(nx, nz);
+    if (nl < 1e-3) { nx = Math.sin(this.yaw); nz = Math.cos(this.yaw); nl = 1; } // bem no centro: empurra pra trás
     nx /= nl; nz /= nl;
-    const facing = -(nx * -Math.sin(this.yaw) + nz * -Math.cos(this.yaw)) > 0.3;
+    const front = -(nx * -Math.sin(this.yaw) + nz * -Math.cos(this.yaw)) > 0.3, facing = front || !!def.zone; // zona: defende de qualquer lado
+    const dmg = def.dmg * (o.mul || 1) * this.m.dmgIn, kn = o.counter ? 1.3 : 1;
     const knock = (m, up = 0) => {
-      this.vel.x = nx * def.knock * m;
-      this.vel.z = nz * def.knock * m;
+      this.vel.x = nx * def.knock * m * kn;
+      this.vel.z = nz * def.knock * m * kn;
       if (up > 0) { this.vel.y = Math.max(this.vel.y, up); this.grounded = false; this.jumpCutDone = true; }
     };
+    const status = () => { for (const [id, t, x] of def.status || []) AB.addStatus(this, id, t, { ...x, by: o.by }); };
+    const take = d => { this.lastDmg = d; this.hp -= d; };
+    this.lastDmg = 0;
 
-    if (def.root) this.rootT = Math.max(this.rootT, def.root); // espetos prendem até quem defende
-    // investida do Cavaleiro: o escudo sagrado segura o que vem de frente
-    if (this.atk?.def.armor && this.atk.phase !== 'recovery' && facing) {
+    // escudo frontal (Investida Sagrada): segura o que vem de frente
+    if (this.atk?.def.armor === 'front' && this.atk.phase !== 'recovery' && front) {
       att.vel.x = -nx * 6;
       att.vel.z = -nz * 6;
       this.gain(4);
       return 'shield';
     }
-    // rasteira só é defendida agachado
-    if (this.blocking && facing && (!def.low || this.crouching)) {
-      if (this.blockT < T.parryWindow) {
-        att.stunT = 0.7;
-        att.atk = null;
+    // dano sem reação (tick de zona/aura)
+    if (def.soft) { take(dmg); status(); this.checkKO(); return 'status'; }
+    // armadura: leva parte do dano, não atordoa nem é empurrado (quebra-defesa passa)
+    const armor = this.m.armor || (this.atk?.def.armor === 'super' && this.atk.phase !== 'recovery' ? 0.6 : 0);
+    if (armor && !def.guardBreak) { take(dmg * armor); this.flashT = 0.12; status(); def.onVictim?.(this, att, 'armor', o.x); this.checkKO(); return 'armor'; }
+    // defesa (rasteira só agachado; zona não tem parry)
+    if (this.blocking && facing && !def.unblockable && (!def.low || this.crouching)) {
+      if (this.parryT > 0 && !def.zone && !def.noParry) {
+        Object.assign(att, { stunT: 0.7, flashT: 0.12, atk: null }); // quem levou parry cambaleia (com animação)
         att.vel.x = -nx * 8;
         att.vel.z = -nz * 8;
-        this.gain(20);
+        this.parryT = this.parryLock = 0;
+        this.gain(15);
         return 'parry';
       }
+      if (def.statusOnBlock) status(); // ex.: Prisão de Ossos prende mesmo defendendo
       if (def.guardBreak) {
         this.blocking = false;
         this.stunT = 0.6;
-        this.hp -= def.dmg * 0.35;
+        take(dmg * 0.35);
         knock(0.7);
         this.flashT = 0.1;
-        this.gain(3);
+        this.gain(2);
         this.checkKO();
         return 'break';
       }
-      this.hp -= def.dmg * 0.1;
+      take(dmg * 0.1);
       knock(0.6);
-      this.gain(3);
+      this.gain(2);
       this.checkKO();
       return 'block';
     }
 
-    // cada hit seguido atordoa menos; o último da sequência arremessa (dá chance de reagir)
-    this.comboN = this.comboT > 0 ? this.comboN + 1 : 1;
+    // combo: só conta se ainda estava tonto/no ar (golpe que dava pra defender começa outro combo).
+    // Depois do 2º hit cada um tira menos; o 4º arremessa (dá chance de reagir).
+    const chained = this.comboT > 0 && (this.stunT > 0 || !this.grounded);
+    this.comboN = chained ? this.comboN + 1 : 1;
     this.comboT = 0.9;
-    const fin = this.comboN >= T.comboMax, air = !this.grounded; // no ar: cada golpe levanta mais (malabarismo)
-    this.hp -= def.dmg;
-    this.stunT = def.stun * Math.max(0.35, 1 - T.comboDecay * (this.comboN - 1));
-    this.atk = null;
-    this.tell = null;
-    this.sliding = false;
-    this.dashT = 0;
-    this.sprinting = false;
-    this.bounced = false;
-    this.flashT = 0.12;
+    const n = this.comboN, fin = n === T.comboMax, air = !this.grounded; // no ar: cada golpe levanta mais (malabarismo)
+    take(dmg * Math.max(0.5, 1 - 0.1 * Math.max(0, n - 2)));
+    this.stunT = def.stun * Math.max(0.35, 1 - T.comboDecay * (n - 1));
+    Object.assign(this, { atk: null, tell: null, sliding: false, dashT: 0, sprinting: false, bounced: false, flashT: 0.12 });
     knock(fin ? 1.8 : 1, fin ? Math.max(def.up, 4) : air ? Math.max(def.up, 5.5) : def.up);
-    if (fin) this.comboT = 0;
-    this.gain(4);
-    if (def.poison) { this.poisonT = def.poison; this.poisonDps = def.poisonDps; this.poisonBy = att.atk !== undefined && att.gain ? att : this.poisonBy; }
+    if (def.pull) { this.vel.x = -nx * def.pull; this.vel.z = -nz * def.pull; } // puxa pra perto
+    this.gain(2);
+    status();
+    def.onVictim?.(this, att, 'hit', o.x);
     this.checkKO();
     return 'hit';
   }

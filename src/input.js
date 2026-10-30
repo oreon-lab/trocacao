@@ -7,15 +7,15 @@ export const ACTIONS = [
   ['forward', 'Andar pra frente'], ['back', 'Andar pra trás'], ['left', 'Andar pra esquerda'], ['right', 'Andar pra direita'],
   ['jump', 'Pular'], ['dash', 'Dash'], ['crouch', 'Agachar / slide'],
   ['light', 'Soco rápido'], ['heavy', 'Soco pesado'], ['block', 'Defender / parry'], ['dodge', 'Esquivar'], ['grab', 'Giro do Furacão (agarrar)'],
-  ['q', 'Bola de energia'], ['r', 'Super soco'], ['lock', 'Travar a mira no oponente'], ['view', 'Trocar 1ª/3ª pessoa'], ['pause', 'Pausar'],
+  ['a1', 'Habilidade rápida'], ['a2', 'Habilidade 2'], ['a3', 'Habilidade 3'], ['ult', 'Ultimate (energia cheia)'], ['lock', 'Travar a mira no oponente'], ['view', 'Trocar 1ª/3ª pessoa'], ['pause', 'Pausar'],
 ];
 export const DEFAULT_BINDS = {
   forward: ['KeyW', 'ArrowUp'], back: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   jump: ['Space', ''], dash: ['ShiftLeft', 'ShiftRight'], crouch: ['KeyC', 'ControlLeft'],
   light: ['Mouse0', ''], heavy: ['Mouse2', ''], block: ['KeyF', 'Mouse4'], dodge: ['KeyQ', 'Mouse3'], grab: ['KeyG', ''],
-  q: ['KeyE', ''], r: ['KeyR', ''], lock: ['Mouse1', 'KeyT'], view: ['KeyV', ''], pause: ['KeyP', ''],
+  a1: ['KeyE', 'Digit1'], a2: ['KeyR', 'Digit2'], a3: ['KeyZ', 'Digit3'], ult: ['KeyX', 'Digit4'], lock: ['Mouse1', 'KeyT'], view: ['KeyV', ''], pause: ['KeyP', ''],
 };
-const EDGE = new Set(['jump', 'dash', 'dodge', 'grab', 'q', 'r', 'light', 'heavy']); // "apertou agora"
+const EDGE = new Set(['jump', 'dash', 'dodge', 'grab', 'a1', 'a2', 'a3', 'ult', 'light', 'heavy']); // "apertou agora"
 const MOVE = { forward: [0, 1], back: [0, -1], left: [-1, 0], right: [1, 0] };     // toque duplo = dash
 
 const NAMES = {
@@ -59,6 +59,7 @@ export class PlayerInput {
       this.down.add(code);
       for (const a of acts) {
         if (EDGE.has(a)) this.p[a] = true;
+        if (a === 'block') this.p.blockTap = true; // parry = aperto da defesa
         if (a === 'view') this.onToggleView?.();
         if (a === 'lock') this.onLock?.();
         if (a === 'pause') document.exitPointerLock();
@@ -108,9 +109,11 @@ export class PlayerInput {
       I.crouch = this.held('crouch');
       I.block = this.held('block');
       for (const a of EDGE) if (p[a] && a !== 'dash') I[a] = true;
+      if (p.blockTap) I.blockTap = true;
       if (p.dash) { I.dash = true; I.dashX = p.dashX; I.dashZ = p.dashZ; }
     }
     for (const a of EDGE) p[a] = false;
+    p.blockTap = false;
     p.dashX = p.dashZ = 0;
   }
 }
