@@ -7,7 +7,7 @@ const pct = v => Math.round(v * 100) + '%';
 
 export const DEFAULT_SETTINGS = {
   char: 'Barbarian', diff: 'normal', fightLen: 'normal', roundTime: 99, rounds: 2,
-  tps: true, lockPull: 1, fov: 80, sens: 1, invertY: false, dbl: true, shake: 1, dmgNumbers: true, warnings: true, dodgeHint: true,
+  tps: true, lockPull: 1, fov: 80, sens: 1, invertY: false, dbl: true, shake: 1, dmgNumbers: true, warnings: true, dodgeHint: true, tutorialDone: false,
   quality: 'high', shadows: true, autoRes: true, resScale: 1, particles: 1, crowd: true, showFps: false, fs: true,
   vol: 0.6, binds: structuredClone(DEFAULT_BINDS),
 };

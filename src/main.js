@@ -8,8 +8,19 @@ import { Bot } from './bot.js';
 import { Net, snapshot, Remote } from './net.js';
 import { FX, sfx, audio } from './fx.js';
 import { initMenu, DEFAULT_SETTINGS } from './menu.js';
+import { createTutorial } from './tutorial.js';
 
 const $ = id => document.getElementById(id);
+
+// ---------- tela de carregamento (o HTML já está na tela; aqui só a barra, o texto e o sumiço) ----------
+const loading = {
+  shown: 0.04,
+  set(k, text) { this.shown = Math.max(this.shown, k); $('ldFill').style.width = (this.shown * 100).toFixed(1) + '%'; if (text) $('ldStatus').textContent = text; },
+  done() { this.set(1, 'LUTE!'); setTimeout(() => $('loading').classList.add('done'), 250); },
+};
+loading.set(0.12, 'CARREGANDO OS LUTADORES E A ARENA...');
+THREE.DefaultLoadingManager.onProgress = (url, n, total) => loading.set(0.12 + 0.73 * (n / total)); // todos os .glb/.gltf e texturas
+const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r))); // deixa o navegador desenhar o texto novo
 
 // ---------- cena ----------
 const canvas = $('game');
@@ -36,6 +47,8 @@ const arena = createArena(scene);
 const player = new Fighter('VOCÊ', 0x3fa7ff);
 const enemy = new Fighter('BOT', 0xff5a4f);
 await Promise.all([loadCharacters(), arena.ready]); // personagens + modelos do cenário
+loading.set(0.88, 'CHAMANDO A TORCIDA...');
+await paint();
 arena.buildCrowd(renderer, camera); // torcida = fotos dos personagens KayKit (src/crowd.js)
 let pRig, eRig;
 // 1ª pessoa: cópia do seu personagem presa na câmera (olhos = câmera), só com os braços.
@@ -70,7 +83,7 @@ function applySettings(k) {
   fx.density = settings.particles;
   $('fps').classList.toggle('hidden', !settings.showFps);
   // HUD mostra as teclas configuradas
-  for (const [id, a] of [['dodgeKey', 'dodge'], ['skQk', 'q'], ['skRk', 'r'], ['skGk', 'grab']]) {
+  for (const [id, a] of [['dodgeKeyName', 'dodge'], ['skQk', 'q'], ['skRk', 'r'], ['skGk', 'grab']]) {
     const name = keyName(settings.binds[a].find(Boolean));
     $(id).textContent = name;
     $(id).style.fontSize = name.length > 2 ? '15px' : '';
@@ -180,9 +193,22 @@ const menu = initMenu({
     },
     quit: () => (S.online ? goOffline() : toHome()),
     connect, leaveOnline: () => goOffline(), enterFight: lockPointer,
+    tutorial: startTutorial,
+    skipTutorial: () => { settings.tutorialDone = true; save(); menu.show('home'); },
   },
 });
+// treino rápido (src/tutorial.js): luta sem tempo contra um boneco que o tutorial comanda
+const tutorial = createTutorial({ player, enemy, S, settings, sfx, onFinish: () => { toHome(); document.exitPointerLock(); } });
+function startTutorial() {
+  S.tutorial = true;
+  startMatch();
+  Object.assign(S, { state: 'fight', stateT: 0, timer: Infinity });
+  banner('TREINO!');
+  tutorial.start();
+  lockPointer();
+}
 function toHome() {
+  if (S.tutorial) { tutorial.stop(); S.tutorial = false; settings.tutorialDone = true; save(); } // saiu do treino (terminou ou pulou)
   S.state = 'menu';
   clearHazards();
   setCharacters();
@@ -303,9 +329,9 @@ function startRound() {
   arena.setRadius(T.arenaRadius);
   Object.assign(S, { closing: false, lockOn: false, state: 'intro', stateT: 0, timer: S.online ? 99 : settings.roundTime || Infinity, timeScale: 1, hitstop: 0, trail: [T.hp, T.hp], slowT: 0 });
   banner(`ROUND ${S.round}`);
-  sfx.bell();
+  if (!S.tutorial) sfx.bell();
   const last = S.wins[0] === winsNeeded() - 1 && S.wins[1] === winsNeeded() - 1; // quem ganhar leva a luta
-  sfx.voice(last && S.round > 1 ? 'final_round' : `round_${Math.min(S.round, 5)}`, { force: true, delay: 0.45 });
+  if (!S.tutorial) sfx.voice(last && S.round > 1 ? 'final_round' : `round_${Math.min(S.round, 5)}`, { force: true, delay: 0.45 });
   updatePips();
   if (S.online && S.host) net.send({ t: 'round', round: S.round, wins: S.wins });
 }
@@ -326,7 +352,7 @@ function updateState(dt) {
   if (S.state === 'intro' && S.stateT > 1.3) { S.state = 'fight'; S.stateT = 0; banner('LUTE!'); sfx.voice('fight', { force: true }); }
   if (S.state === 'fight' && S.online && enemy.ko) endRound(0, 'K.O.!');
   // arena fecha com o tempo de luta: ninguém fica parado longe do outro
-  if (S.state === 'fight') {
+  if (S.state === 'fight' && !S.tutorial) {
     const u = clamp((S.stateT - T.shrinkStart) / T.shrinkTime, 0, 1);
     if (u > 0 && !S.closing) { S.closing = true; banner('A ARENA ESTÁ FECHANDO!'); sfx.bell(); }
     arena.setRadius(T.arenaRadius + (T.arenaMin - T.arenaRadius) * u * (2 - u), S.stateT); // desacelera no fim
@@ -415,8 +441,12 @@ function updateHUD(dt) {
   if (gTxt !== S.gTxt) $('skGtxt').textContent = S.gTxt = gTxt;
   // aviso da esquiva: aparece quando um golpe vem; verde = agora é esquiva perfeita
   const th = threat(), now = S.state === 'fight' && player.perfectWindow(enemy);
-  $('dodgeKey').classList.toggle('show', settings.dodgeHint && (now || (!!th && th.k > 0.3) || player.incoming > 0));
+  // tecla da esquiva: aparece quando o golpe vem; na hora de apertar fica verde e um círculo fecha nela
+  // (o círculo fechando = o tempo que você tem; encostou na tecla, acabou)
+  const left = S.state === 'fight' ? player.perfectLeft(enemy) : -1;
+  $('dodgeKey').classList.toggle('show', settings.dodgeHint && (now || (!!th && th.k > 0.3)));
   $('dodgeKey').classList.toggle('now', now);
+  if (now) $('dodgeRing').style.transform = `scale(${1 + 1.7 * Math.min(1, left / T.perfectWindow)})`;
   hud.timer.textContent = Number.isFinite(S.timer) ? Math.ceil(S.timer) : '∞';
   dashPips.forEach((el, i) => {
     const k = i < player.charges ? 1 : i === player.charges ? player.rechargeT / T.dashRecharge : 0;
@@ -538,7 +568,7 @@ function updateHazards(dt) {
     h.t += dt;
     const inside = Math.hypot(target.pos.x - h.target.x, target.pos.z - h.target.z) < H.radius + T.radius && target.pos.y < 2.5;
     if (inside) target.danger = h.target; else if (target.danger === h.target) target.danger = null;
-    if (inside && H.delay - h.t < T.perfectWindow) target.incoming = 0.05; // janela da esquiva perfeita
+    if (inside && H.delay - h.t < T.perfectWindow) target.incoming = Math.max(0.01, H.delay - h.t); // janela da esquiva perfeita (quanto falta)
     if (h.t < H.delay) continue;
     hazards.splice(i, 1);
     if (target.danger === h.target) target.danger = null;
@@ -658,6 +688,7 @@ const clock = () => performance.now() / 1000;
 function vol(f) { return f === player ? 1 : clamp(1 - player.pos.distanceTo(f.pos) / 35, 0.2, 1); }
 function handleEvents() {
   for (const e of events) {
+    if (S.tutorial) tutorial.onEvent(e);
     const v = vol(e.f), mine = e.victim === player;
     switch (e.type) {
       case 'hit': {
@@ -901,7 +932,7 @@ player.reset(new THREE.Vector3(0, 0, 7), 0);
 enemy.reset(new THREE.Vector3(0, 0, -7), Math.PI);
 
 // ?debug no endereço expõe o estado pra testes no console
-if (location.search.includes('debug')) window.game = { renderer, S, arena, bot, startMatch, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
+if (location.search.includes('debug')) window.game = { tutorial, renderer, S, arena, bot, startMatch, menu, settings, fx, spawnMeteor, hazards, setCharacters, player, enemy, camera, fpHolder, get fpRig() { return fpRig; }, get pRig() { return pRig; }, get eRig() { return eRig; }, input, THREE, tpsAim, updateCamera };
 
 // resolução adaptativa: se o frame passa de ~20ms por um tempo, baixa a resolução interna; se sobra, sobe
 const maxPR = () => Math.min(devicePixelRatio, 2) * settings.resScale;
@@ -937,6 +968,7 @@ function loop(now) {
     input.fill(player.input, active && input.locked);
     if (S.view3) tpsAim();
     if (S.online) remote.apply(enemy); // oponente: estado da rede, interpolado
+    else if (S.tutorial) tutorial.update(sim); // treino: o tutorial comanda o boneco
     else if (sim > 0) bot.update(sim, enemy, player, enemy.input, active);
     if (sim > 0) {
       const n = Math.ceil(sim / (1 / 120)), h = sim / n; // substeps de física a 120Hz
@@ -1003,4 +1035,9 @@ function loop(now) {
   renderer.render(scene, camera);
 }
 applySettings();
+loading.set(0.95, 'AFIANDO OS GOLPES...');
+await paint();
+renderer.compile(scene, camera); // compila os shaders agora (senão o 1º quadro trava)
 requestAnimationFrame(loop);
+loading.done();
+if (!settings.tutorialDone) menu.show('welcome'); // primeira vez: oferece o treino antes do menu

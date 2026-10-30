@@ -69,10 +69,10 @@ export class Fighter {
   get invuln() { return this.invulnT > 0 || (this.dashT > 0 && T.dashTime - this.dashT < T.dashIFrames); }
   gain(n) { this.meter = clamp(this.meter + n, 0, T.meterMax); }
 
-  // o golpe do oponente (ou um projétil) vai chegar em instantes? = janela da esquiva perfeita
-  perfectWindow(foe) {
-    if (this.incoming > 0) return true; // projétil quase batendo (o main marca)
-    if (!foe || foe.ko) return false;
+  // janela da esquiva perfeita: quanto falta (s) pro golpe/projétil chegar, se já dá pra apertar; -1 = ainda não
+  perfectLeft(foe) {
+    if (this.incoming > 0) return this.incoming; // projétil quase batendo (o main marca quanto falta)
+    if (!foe || foe.ko) return -1;
     const a = foe.atk;
     if (a && !a.hit && !a.done && !a.def.ranged) {
       const d = a.def, dist = Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z);
@@ -81,11 +81,14 @@ export class Fighter {
         : a.kind === 'blink' ? dist < 13
         : a.kind === 'charge' ? (a.phase === 'active' ? foe.inCone(this, d.range + d.speed * T.perfectWindow + 0.6, 0.5) > 0 : dist < 4)
         : foe.reach(this, d) < 0.9;
-      if (left <= T.perfectWindow && near) return true;
+      if (left <= T.perfectWindow && near) return Math.max(0, left);
     }
-    const tl = foe.tell; // bot armando o golpe
-    return !!(tl && !tl.pressed && tl.dur - tl.el < 0.08 && Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 3);
+    const tl = foe.tell; // bot armando o golpe (ainda vai apertar e depois tem o windup)
+    if (tl && !tl.pressed && tl.dur - tl.el < 0.08 && Math.hypot(foe.pos.x - this.pos.x, foe.pos.z - this.pos.z) < 3)
+      return Math.min(T.perfectWindow, tl.dur - tl.el + (ATTACKS[tl.kind]?.windup || 0.1));
+    return -1;
   }
+  perfectWindow(foe) { return this.perfectLeft(foe) >= 0; }
   forward(out) { return out.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw)); }
   lookDir(out) {
     const cp = Math.cos(this.pitch);

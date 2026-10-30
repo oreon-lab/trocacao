@@ -53,6 +53,7 @@ Como sincroniza: cada um simula o próprio lutador (zero atraso no seu movimento
 | `tools/fp_anims.py` | Gera o `extra_anims.glb`: `blender -b --factory-startup --python tools/fp_anims.py` (IK nas mãos sobre a Unarmed_Idle, assado quadro a quadro; imprime onde as mãos caem na tela) |
 | `check.html` | Folha de poses de cada personagem + checagem de pés/altura (`?c=Knight`) |
 | `src/arena.js` | **Arena do Castelo**: coliseu de pedra (piso, mureta, pilares com tocha, arquibancada, muro com portões, estandartes e torres) numa vila medieval com castelo, morros e montanhas + colisão com borda/pilares |
+| `src/tutorial.js` | Treino rápido (10 passos: andar, socos, dash, pulo duplo, defesa, esquiva perfeita em câmera lenta, habilidade, super, giro). Abre sozinho na 1ª vez; refaz em Como Jogar > FAZER O TREINO |
 | `src/crowd.js` | Torcida: os personagens KayKit são fotografados no carregamento em vários quadros da comemoração/espera ("impostores"); cada torcedor é um cartaz que vira pra câmera e anima no shader (~400 torcedores = 800 triângulos) |
 | `assets/env/` | Modelos do cenário — KayKit Dungeon Remastered e Medieval Hexagon (Kay Lousberg, CC0). Baixar de novo: `python tools/get_env.py` |
 | `env_check.html` | Folha dos modelos do cenário com o tamanho de cada um (`?set=dungeon` / `?set=hex`) |
